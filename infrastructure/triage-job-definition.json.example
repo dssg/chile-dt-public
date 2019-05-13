@@ -1,0 +1,14 @@
+{
+    "jobDefinitionName": "PROJECT_NAME-run-experiment",
+    "type": "container",
+    "containerProperties": {
+        "image": "AWS_ACCOUNT.dkr.ecr.us-west-2.amazonaws.com/dsapp/triage",
+        "vcpus": 60,
+        "memory": 235520,
+        "jobRoleArn": "arn:aws:iam::AWS_ACCOUNT:role/dsappBatchJobRole",
+		"command": [
+		    "--experiment-file", "Ref::experiment_file", "--output-path", "Ref::output_path", "Ref::replace"
+	    ]
+    },
+    "retryStrategy": {"attempts": 3}
+}

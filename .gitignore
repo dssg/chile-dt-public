@@ -60,3 +60,7 @@ modeling/matrices/*
 
 # Test notebook
 *staging_queries.ipynb
+
+
+**/triage/config/*
+**/triage/infrastructure/*.json

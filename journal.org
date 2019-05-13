@@ -1,0 +1,3622 @@
+#+TITLE: Chile's DT: Journal
+#+AUTHOR: Adolfo De Unánue
+#+PROPERTY: header-args:sql :engine postgresql
+#+PROPERTY: header-args:sql+ :dbhost 0.0.0.0
+#+PROPERTY: header-args:sql+ :dbport 8888
+#+PROPERTY: header-args:sql+ :dbuser direccion_trabajo_inspections_write
+#+PROPERTY: header-args:sql+ :database direccion_trabajo_inspections
+#+PROPERTY: header-args:sql+ :results table drawer
+#+PROPERTY: header-args:sql+ :cmdline -q
+#+PROPERTY: header-args:sh  :results verbatim org
+#+PROPERTY: header-args:sh+ :prologue exec 2>&1 :epilogue :
+#+PROPERTY: header-args:ipython   :session chile_dt
+#+PROPERTY: header-args:ipython+ :results raw drawer
+#+PROPERTY: header-args:R :session :exports results
+
+* At the beginning
+
+The database were very slow, so we updated the database statistics
+
+#+BEGIN_EXAMPLE sql
+VACUUM FULL ANALYZE;
+#+END_EXAMPLE
+
+Also we renamed the DSSG's =results= schema, to avoid future conflicts
+with =triage=
+
+#+BEGIN_EXAMPLE sql
+alter schema results rename to results_dssg_2018;
+alter schema cleaned rename to cleaned_dssg_2018;
+#+END_EXAMPLE
+
+and move some tables to the schema =raw_dssg_2018=:
+
+#+BEGIN_SRC  sql
+set role direccion_trabajo_inspections_write;
+
+create schema if not exists raw_dssg_2018;
+
+alter table raw.inspectors set schema raw_dssg_2018;
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+| SET           |
+|---------------|
+| SET           |
+| CREATE SCHEMA |
+| ALTER TABLE   |
+:END:
+
+** =public= is very polluted
+
+The =public= schema contained several tables that didn't belong there:
+
+#+BEGIN_SRC sql
+\dt
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+| SET               |                                                 |       |                                  |
+|-------------------+-------------------------------------------------+-------+----------------------------------|
+| List of relations |                                                 |       |                                  |
+| Schema            | Name                                            | Type  | Owner                            |
+| public            | cleaned.industry_codes                           | table | smendizabal                      |
+| public            | copper_formatted                                 | table | direccion_trabajo_inspections_write |
+| public            | dt_fi_auditasignacion                             | table | dt_migrate_to_postgres              |
+| public            | dt_fi_auditfiscalizacion                          | table | dt_migrate_to_postgres              |
+| public            | dt_fi_detallemateria                              | table | dt_migrate_to_postgres              |
+| public            | dt_fi_detallemateriaturno                         | table | dt_migrate_to_postgres              |
+| public            | dt_fi_estadofiscalizacion                         | table | dt_migrate_to_postgres              |
+| public            | dt_fi_informefiscalizacion                        | table | dt_migrate_to_postgres              |
+| public            | dt_fi_informemateriafisc                          | table | dt_migrate_to_postgres              |
+| public            | dt_fi_ingreso_fiscalizacion                        | table | dt_migrate_to_postgres              |
+| public            | dt_fi_materiafiscalizar                           | table | dt_migrate_to_postgres              |
+| public            | dt_fi_otrosafectados                              | table | dt_migrate_to_postgres              |
+| public            | dt_fi_solicitadapor                               | table | dt_migrate_to_postgres              |
+| public            | dt_fi_tipo_documento                               | table | dt_migrate_to_postgres              |
+| public            | dt_fi_tipodocumento                               | table | dt_migrate_to_postgres              |
+| public            | dt_fi_tipomateria                                 | table | dt_migrate_to_postgres              |
+| public            | dt_fi_tiponacionalidades                          | table | dt_migrate_to_postgres              |
+| public            | dt_fi_tipoorigenact                               | table | dt_migrate_to_postgres              |
+| public            | dt_fi_tipoterminofiscalizacion                    | table | dt_migrate_to_postgres              |
+| public            | dt_fi_unidadorigen                                | table | dt_migrate_to_postgres              |
+| public            | dt_mul_capitulonormasan                           | table | dt_migrate_to_postgres              |
+| public            | dt_mul_categnorma                                 | table | dt_migrate_to_postgres              |
+| public            | dt_mul_conceptonormasan                           | table | dt_migrate_to_postgres              |
+| public            | dt_mul_detallenormasan                            | table | dt_migrate_to_postgres              |
+| public            | dt_mul_tipocategorias                             | table | dt_migrate_to_postgres              |
+| public            | dt_mul_tipocategoriasturno                        | table | dt_migrate_to_postgres              |
+| public            | spatial_ref_sys                                   | table | rdsadmin                         |
+| public            | tmp_bottom20000                                  | table | direccion_trabajo_inspections_write |
+| public            | tmp_bottom4000                                   | table | direccion_trabajo_inspections_write |
+| public            | tmp_top19000                                     | table | direccion_trabajo_inspections_write |
+| public            | tmp_top19000bottom20000                          | table | direccion_trabajo_inspections_write |
+| public            | tmp_top2000                                      | table | direccion_trabajo_inspections_write |
+| public            | us_gaz                                           | table | rdsadmin                         |
+| public            | us_lex                                           | table | rdsadmin                         |
+| public            | us_rules                                         | table | rdsadmin                         |
+:END:
+
+Like tables related to the DT's last dump (=dt_*=), some tables with
+statistics (=tmp_{top, bottom}_*=) and some misplaced tables
+(=cleaned.industry_code=, =copper_formatted=). In order to clean the air,
+we created a new schema =public_dssg_2018=) and moved all those tables there.
+
+#+BEGIN_SRC  sql
+set role direccion_trabajo_inspections_write;
+
+create schema if not exists public_dssg_2018;
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+| SET           |
+|---------------|
+| SET           |
+| CREATE SCHEMA |
+:END:
+
+#+BEGIN_SRC sql
+set role direccion_trabajo_inspections_write;
+
+select
+    string_agg(
+        format('alter table public.%I set schema public_dssg_2018;', tablename), E'\n'
+        )
+from   pg_tables
+where  tablename ~ 'tmp_top|tmp_bottom|dt_mul_|dt_fi_|copper|industry' and schemaname = 'public';
+
+\gexec
+
+#+END_SRC
+
+We also fixed the tables'  /ownership/ to =direccion_trabajo_inspections_write=.
+
+#+RESULTS:
+:RESULTS:
+| SET                                                                        |
+|----------------------------------------------------------------------------|
+| SET                                                                        |
+| string_agg                                                                  |
+| alter table public.dt_fi_informefiscalizacion set schema public_dssg_2018;     |
+| alter table public.dt_fi_informemateriafisc set schema public_dssg_2018;       |
+| alter table public.dt_fi_tipodocumento set schema public_dssg_2018;            |
+| alter table public.dt_fi_tipomateria set schema public_dssg_2018;              |
+| alter table public.dt_fi_auditasignacion set schema public_dssg_2018;          |
+| alter table public.dt_fi_auditfiscalizacion set schema public_dssg_2018;       |
+| alter table public.dt_fi_ingreso_fiscalizacion set schema public_dssg_2018;     |
+| alter table public.dt_fi_materiafiscalizar set schema public_dssg_2018;        |
+| alter table public.dt_fi_otrosafectados set schema public_dssg_2018;           |
+| alter table public.dt_fi_tipo_documento set schema public_dssg_2018;            |
+| alter table public.dt_fi_tipoorigenact set schema public_dssg_2018;            |
+| alter table public.dt_fi_tiponacionalidades set schema public_dssg_2018;       |
+| alter table public.dt_fi_detallemateria set schema public_dssg_2018;           |
+| alter table public.dt_fi_detallemateriaturno set schema public_dssg_2018;      |
+| alter table public.dt_fi_estadofiscalizacion set schema public_dssg_2018;      |
+| alter table public.dt_fi_tipoterminofiscalizacion set schema public_dssg_2018; |
+| alter table public.dt_fi_solicitadapor set schema public_dssg_2018;            |
+| alter table public.dt_fi_unidadorigen set schema public_dssg_2018;             |
+| alter table public.dt_mul_capitulonormasan set schema public_dssg_2018;        |
+| alter table public.dt_mul_categnorma set schema public_dssg_2018;              |
+| alter table public.dt_mul_conceptonormasan set schema public_dssg_2018;        |
+| alter table public.dt_mul_detallenormasan set schema public_dssg_2018;         |
+| alter table public.dt_mul_tipocategorias set schema public_dssg_2018;          |
+| alter table public.dt_mul_tipocategoriasturno set schema public_dssg_2018;     |
+| alter table public."cleaned.industry_codes" set schema public_dssg_2018;      |
+| alter table public.tmp_bottom4000 set schema public_dssg_2018;                |
+| alter table public.tmp_top19000bottom20000 set schema public_dssg_2018;       |
+| alter table public.tmp_top19000 set schema public_dssg_2018;                  |
+| alter table public.tmp_bottom20000 set schema public_dssg_2018;               |
+| alter table public.copper_formatted set schema public_dssg_2018;              |
+| alter table public.tmp_top2000 set schema public_dssg_2018;                   |
+| ALTER TABLE                                                                |
+:END:
+
+** Support functions
+
+ In order to handle dates/integers in a safe manner  we added the
+ following pair of functions:
+
+ #+BEGIN_SRC sql
+ create or replace function is_valid_date(text) returns boolean language plpgsql immutable as $$
+ begin
+   return case when $1::date is null then false else true end;
+ exception when others then
+   return false;
+ end;$$;
+
+
+ create or replace function is_valid_integer(text) returns boolean language plpgsql immutable as $$
+ begin
+   return case when $1::integer is null then false else true end;
+ exception when others then
+   return false;
+ end;$$;
+ #+END_SRC
+
+** Extensions
+
+   #+BEGIN_SRC sql
+   create extension if not exists unaccent;
+   create extension if not exists pg_trgm;
+   \dx
+   #+END_SRC
+
+   #+RESULTS:
+   :RESULTS:
+   | List of installed extensions |         |           |                                                                                                                     |
+   |------------------------------+---------+-----------+---------------------------------------------------------------------------------------------------------------------|
+   | Name                         | Version | Schema    | Description                                                                                                         |
+   | address_standardizer          |   2.2.5 | public    | Used to parse an address into constituent elements. Generally used to support geocoding address normalization step. |
+   | address_standardizer_data_us    |   2.2.5 | public    | Address Standardizer US dataset example                                                                             |
+   | fuzzystrmatch                |     1.0 | public    | determine similarities and distance between strings                                                                 |
+   | intarray                     |     1.0 | public    | functions, operators, and index support for 1-D arrays of integers                                                  |
+   | pg_trgm                       |     1.1 | public    | text similarity measurement and index searching based on trigrams                                                   |
+   | plpgsql                      |     1.0 | pg_catalog | PL/pgSQL procedural language                                                                                        |
+   | postgis                      |   2.2.5 | public    | PostGIS geometry, geography, and raster spatial types and functions                                                 |
+   | postgis_tiger_geocoder         |   2.2.5 | tiger     | PostGIS tiger geocoder and reverse geocoder                                                                         |
+   | postgis_topology              |   2.2.5 | topology  | PostGIS topology spatial types and functions                                                                        |
+   | postgres_fdw                  |     1.0 | public    | foreign-data wrapper for remote PostgreSQL servers                                                                  |
+   | unaccent                     |     1.0 | public    | text search dictionary that removes accents                                                                         |
+   :END:
+
+
+* The dump
+
+The last dump from Dirección del trabajo is already at the =raw=
+schema. All the new tables have the prefix =dt_=
+
+#+BEGIN_SRC sql
+\dt raw.dt_*
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+| SET               |                              |       |                                  |
+|-------------------+------------------------------+-------+----------------------------------|
+| List of relations |                              |       |                                  |
+| Schema            | Name                         | Type  | Owner                            |
+| raw               | dt_fi_auditasignacion          | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_auditfiscalizacion       | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_detallemateria           | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_detallemateriaturno      | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_estadofiscalizacion      | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_informefiscalizacion     | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_informemateriafisc       | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_ingreso_fiscalizacion     | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_materiafiscalizar        | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_otrosafectados           | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_solicitadapor            | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_tipo_documento            | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_tipodocumento            | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_tipomateria              | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_tiponacionalidades       | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_tipoorigenact            | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_tipoterminofiscalizacion | table | direccion_trabajo_inspections_write |
+| raw               | dt_fi_unidadorigen             | table | direccion_trabajo_inspections_write |
+| raw               | dt_mul_capitulonormasan        | table | direccion_trabajo_inspections_write |
+| raw               | dt_mul_categnorma              | table | direccion_trabajo_inspections_write |
+| raw               | dt_mul_conceptonormasan        | table | direccion_trabajo_inspections_write |
+| raw               | dt_mul_detallenormasan         | table | direccion_trabajo_inspections_write |
+| raw               | dt_mul_tipocategorias          | table | direccion_trabajo_inspections_write |
+| raw               | dt_mul_tipocategoriasturno     | table | direccion_trabajo_inspections_write |
+:END:
+
+The ERD diagrams are [[pdfview:documentation/InformeFiscalizacion.pdf::1][here]] and [[pdfview:documentation/IngresoFiscalizacion.pdf::1][here]].  Documentation about the columns
+is [[file:documentation/Tablas%20Fiscalizacion%2001082018.xlsx][here]].
+
+
+#+BEGIN_NOTES
+This tables only contain information about companies that were
+inspected. It doesn't contain the *universe* of companies that
+potentially could be inspected. For solving this bias
+a list of companies (facilities) were provided by DT as /tax/ data
+(stored in =raw.taxes=). Unfortunately that table has the information
+about the company is a masked form, so to this date (September
+26, 2018) we can't link it with the rest of the tables.
+#+END_NOTES
+
+** UPDATE: A new dump
+
+On October 26, 2018 we received a new dump from DT, containing tables that
+were missing in the previous dump from DT:
+
+#+BEGIN_SRC sh :dir data
+ls -lh fi_* mul*
+#+END_SRC
+
+#+RESULTS:
+#+BEGIN_SRC org
+-rw-rw-r-- 1 nanounanue nanounanue 1.0K Oct 26 12:02 fi_infofiscdetectainfr.csv
+-rw-rw-r-- 1 nanounanue nanounanue 890M Oct 26  2018 fi_informemateriafisc.csv
+-rw-rw-r-- 1 nanounanue nanounanue 1.8M Oct 26  2018 mul_detalle_norma_san.csv
+-rw-rw-r-- 1 nanounanue nanounanue 105M Oct 26  2018 mul_resolucion.csv
+-rw-rw-r-- 1 nanounanue nanounanue 539M Oct 26  2018 mul_sancion.csv
+#+END_SRC
+
+Two of the files were present in the original dump:
+=fi_informemateriafisc= y =mul_detalle_norma_san=.
+
+Besides this, =mul_sancion= has many problems with the columns
+(basically the file is broken)
+
+
+We uploaded the remaining two to the =raw= schema
+
+#+BEGIN_SRC sh :dir data
+# create the tables
+{ echo "set role direccion_trabajo_inspections_write;" &
+for f in fi_infofiscdetectainfr mul_resolucion
+do
+  head  $f.csv | csvsql -i postgresql --no-constraints --no-inference --db-schema raw --tables dt_$f
+done; }  | psql service=dt -q
+#+END_SRC
+
+#+RESULTS:
+#+BEGIN_SRC org
+SET
+Timing is on.
+SET
+Time: 53.733 ms
+CREATE TABLE
+Time: 78.668 ms
+CREATE TABLE
+Time: 71.651 ms
+#+END_SRC
+
+
+#+BEGIN_SRC sh :dir data
+for f in fi_infofiscdetectainfr mul_resolucion
+do
+  < $f.csv psql service=dt -q -c "set role direccion_trabajo_inspections_write" -c "\copy raw.dt_$f from stdin with header csv"
+done
+#+END_SRC
+
+#+RESULTS:
+#+BEGIN_SRC org
+SET
+Timing is on.
+SET
+Time: 54.381 ms
+COPY 9
+Time: 109.713 ms
+SET
+Timing is on.
+SET
+Time: 54.327 ms
+COPY 854987
+Time: 91122.163 ms (01:31.122)
+#+END_SRC
+
+
+* About the role
+
+In our current database we need to set the following =role= in order to
+be able to execute the queries
+
+#+BEGIN_SRC sql :tangle sql/etl_dump_semantic.sql
+set role direccion_trabajo_inspections_write;
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+| SET |
+|-----|
+| SET |
+:END:
+
+
+* ETL from dump to triage
+
+** Preliminaries
+ In order to use this data with =triage= we need to create several
+ entity-related tables and an events table (in this case each event is
+ an inspection).
+
+ The DT's dump contains information about the inspections in two
+ stages:
+
+ - When the inspection is requested (=raw.dt_fi_ingreso_fiscalizacion=)
+
+ #+BEGIN_SRC sql
+ set role direccion_trabajo_inspections_write;
+ select to_char(count(*), '999,999,999') as ingresos from raw.dt_fi_ingreso_fiscalizacion;
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ | ingresos  |
+ |-----------|
+ | 2,803,056 |
+ :END:
+
+ - When the inspection is concluded (=raw.dt_fi_informefiscalizacion=)
+
+ #+BEGIN_SRC sql
+ set role direccion_trabajo_inspections_write;
+ select to_char(count(*), '999,999,999') as informes from raw.dt_fi_informefiscalizacion;
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ | informes  |
+ |-----------|
+ | 2,684,127 |
+ :END:
+
+ We also need to recover some information from tables previous to this
+ dump, in particular:
+
+ - =raw.cae= :: codes for economic activity
+ - =raw.comunaglosa= :: codes and description about comunas
+ - =raw.office_data= :: Inspector's office  data
+ - =raw.macroeconomic_monthly= :: Chile's macroeconomic activity per month
+ - =raw.copper= :: Daily copper prices
+ - =raw.empresas_*= :: Public tax data
+
+ We need to create some additional /schemas/:
+
+ #+BEGIN_SRC sql
+ set role direccion_trabajo_inspections_write;
+ create schema if not exists cleaned;
+ create schema if not exists semantic;
+ #+END_SRC
+
+ #+RESULTS:
+
+
+** Cleaned schema
+
+*** Companies taxes
+
+ We received the more recent tax data on 2018-09-27:
+
+ #+BEGIN_SRC sql :tangle sql/create_taxes_tables.sql
+ set role direccion_trabajo_inspections_write;
+
+ drop schema if exists taxes cascade;
+
+ create schema if not exists taxes;
+
+ create table taxes.empresas_pj_at2006 (
+         "año" varchar,
+         "rut" varchar ,
+         "dv" varchar ,
+         "razon_social" varchar ,
+         "tramo_ventas" varchar ,
+         "n_trabajadores" varchar,
+         "rubro" varchar ,
+         "subrubro" varchar ,
+         "actividad_economica" varchar ,
+         "comuna" varchar ,
+         "region" varchar ,
+         "fecha_inicio" varchar,
+         "fecha_termino_giro" varchar,
+         "tipo_termino_giro" varchar,
+         "tipo_contribuyente" varchar ,
+         "subtipo_contribuyente" varchar ,
+         "f22_c_645" varchar,
+         "f22_c_646" varchar,
+         "calle" varchar ,
+         "numero" varchar ,
+         "bloque" varchar,
+         "depto" varchar,
+         "villa_poblacion" varchar,
+         "ciudad" varchar
+ );
+
+ -- This one is different :/
+ create table taxes.empresas_pj_at2017 (
+         "rut" varchar ,
+         "dv" varchar ,
+         "razon_social" varchar ,
+         "tramo_ventas" varchar ,
+         "n_trabajadores" varchar,
+         "rubro" varchar ,
+         "subrubro" varchar ,
+         "actividad_economica" varchar ,
+         "region" varchar ,
+         "comuna" varchar ,
+         "calle" varchar ,
+         "numero" varchar ,
+         "bloque" varchar,
+         "depto" varchar,
+         "villa_poblacion" varchar,
+         "fecha_inicio" varchar,
+         "fecha_termino_giro" varchar,
+         "tipo_termino_giro" varchar,
+         "tipo_contribuyente" varchar ,
+         "subtipo_contribuyente" varchar ,
+         "f22_c_645" varchar,
+         "f22_c_646" varchar
+ );
+
+ create table taxes.empresas_pj_at2016 (like taxes.empresas_pj_at2006 including all);
+ create table taxes.empresas_pj_at2015 (like taxes.empresas_pj_at2006 including all);
+ create table taxes.empresas_pj_at2014 (like taxes.empresas_pj_at2006 including all);
+ create table taxes.empresas_pj_at2013 (like taxes.empresas_pj_at2006 including all);
+ create table taxes.empresas_pj_at2012 (like taxes.empresas_pj_at2006 including all);
+ create table taxes.empresas_pj_at2011 (like taxes.empresas_pj_at2006 including all);
+ create table taxes.empresas_pj_at2010 (like taxes.empresas_pj_at2006 including all);
+ create table taxes.empresas_pj_at2009 (like taxes.empresas_pj_at2006 including all);
+ create table taxes.empresas_pj_at2008 (like taxes.empresas_pj_at2006 including all);
+ create table taxes.empresas_pj_at2007 (like taxes.empresas_pj_at2006 including all);
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ | DROP SCHEMA   |
+ | CREATE SCHEMA |
+ | CREATE TABLE  |
+ | CREATE TABLE  |
+ | CREATE TABLE  |
+ | CREATE TABLE  |
+ | CREATE TABLE  |
+ | CREATE TABLE  |
+ | CREATE TABLE  |
+ | CREATE TABLE  |
+ | CREATE TABLE  |
+ | CREATE TABLE  |
+ | CREATE TABLE  |
+ | CREATE TABLE  |
+ :END:
+
+ First,  we load the /historic/ files:
+
+ #+BEGIN_SRC sh :dir /historico_empresas :tangle sql/etl_taxes.sh
+
+ psql service=dt -f sql/create_taxes_tables.sql
+
+ for f in *.TXT
+ do
+ table=$(echo "${f%.*}" | (tr '[:upper:]' '[:lower:]'))
+ echo "Copying data from $f to table $table"
+ cat $f | awk -F'\t' 'NF==24' | psql service=dt -c "set role direccion_trabajo_inspections_write; copy taxes.$table from stdin  with csv header delimiter E'\t' NULL '' ENCODING 'iso-8859-1' QUOTE E'\|'"
+ done
+ #+END_SRC
+
+ /NOTE/: We added the correct file encoding and change the =quote= since
+ some columns had a doble quote in the name (e.g. *O"HIGGINS*)
+
+ /NOTE/: We are ignoring lines that have more than the 24 columns. Only
+ two lines in the file =Empresas_PJ_AT2015.TXT= and another 3 more in
+ =Empresas_PJ_AT2016.TXT=:
+
+ #+BEGIN_SRC sh :dir ./data/historico_empresas
+ for f in *.TXT
+ do
+ echo "============ $f ============"
+  awk -F'\t' '{print NF}' $f | sort | uniq -c
+ done
+ #+END_SRC
+
+ #+RESULTS:
+ #+BEGIN_SRC org
+ ============ Empresas_PJ_AT2006.TXT ============
+  235147 24
+ ============ Empresas_PJ_AT2007.TXT ============
+  247380 24
+ ============ Empresas_PJ_AT2008.TXT ============
+  260030 24
+ ============ Empresas_PJ_AT2009.TXT ============
+  272367 24
+ ============ Empresas_PJ_AT2010.TXT ============
+  286510 24
+ ============ Empresas_PJ_AT2011.TXT ============
+  302194 24
+ ============ Empresas_PJ_AT2012.TXT ============
+  324733 24
+ ============ Empresas_PJ_AT2013.TXT ============
+  354198 24
+ ============ Empresas_PJ_AT2014.TXT ============
+  387934 24
+ ============ Empresas_PJ_AT2015.TXT ============
+  426388 24
+       2 25
+ ============ Empresas_PJ_AT2016.TXT ============
+  460604 24
+       3 25
+ #+END_SRC
+
+ Now, dealing with 2017 data:
+
+ #+BEGIN_SRC sh :dir ./data  :tangle sql/etl_taxes.sh
+ in2csv --no-inference nomina_empresas_pjuridicas_AT2017.xlsx | awk '(NR>=3)' | head -n -39 > empresas_2017.csv
+ #+END_SRC
+
+ /NOTE/: The last 40 lines are not data, are footnotes...
+
+ #+BEGIN_SRC sh :dir ./data :tangle sql/etl_taxes.sh
+ < empresas_2017.csv psql service=dt -c "set role direccion_trabajo_inspections_write; copy taxes.empresas_pj_at2017 from stdin  with csv header delimiter E',' null '' encoding 'iso-8859-1'";
+ #+END_SRC
+
+ #+BEGIN_SRC sql :tangle sql/etl_taxes_data.sql :async
+ set role direccion_trabajo_inspections_write;
+
+ drop table if exists cleaned.companies_taxes;
+
+ create table cleaned.companies_taxes as (
+ select
+ "año"::smallint as year,
+ rut::integer as company,
+ dv::varchar(1),
+ fecha_inicio::date as fecha_inicio,
+ fecha_termino_giro::date as fecha_termino_giro,
+ lower(btrim(tipo_termino_giro)) as tipo_termino_giro,
+ lower(btrim(razon_social)) as razon_social,
+ lower(btrim(tramo_ventas)) as tramo_ventas,
+ nullif(lower(btrim(split_part(actividad_economica, '-', 1))), 'sin informacion')::integer as actividad_economica,
+ lower(btrim(split_part(actividad_economica, '-', 2))) as actividad_economica_description,
+ lower(btrim(split_part(rubro, '-', 1))) as rubro,
+ lower(btrim(split_part(rubro, '-', 2))) as rubro_description,
+ nullif(lower(btrim(split_part(subrubro, '-', 1))), 'sin informacion')::smallint as subrubro,
+ lower(btrim(split_part(subrubro, '-', 2))) as subrubro_description,
+ lower(btrim(tipo_contribuyente)) as tipo_contribuyente,
+ lower(btrim(subtipo_contribuyente)) as subtipo_contribuyente,
+ lower(btrim(bloque)) as bloque,
+ lower(btrim(calle)) as calle,
+ lower(btrim(numero)) as numero,
+ lower(btrim(depto)) as depto,
+ lower(btrim(villa_poblacion)) as villa_poblacion,
+ lower(btrim(comuna)) as comuna,
+ lower(btrim(region)) as region,
+ lower(btrim(ciudad)) as ciudad,
+ nullif(lower(btrim(n_trabajadores)), 'sin informacion')::integer as num_trabajadores,
+ replace(f22_c_645::text, ',', '.')::double precision as f22_c_645,
+ replace(f22_c_646::text, ',', '.')::double precision as f22_c_646
+ from taxes.empresas_pj_at2006
+ union all
+ select
+ "año"::smallint as year,
+ rut::integer as company,
+ dv::varchar(1),
+ fecha_inicio::date as fecha_inicio,
+ fecha_termino_giro::date as fecha_termino_giro,
+ lower(btrim(tipo_termino_giro)) as tipo_termino_giro,
+ lower(btrim(razon_social)) as razon_social,
+ lower(btrim(tramo_ventas)) as tramo_ventas,
+ nullif(lower(btrim(split_part(actividad_economica, '-', 1))), 'sin informacion')::integer as actividad_economica,
+ lower(btrim(split_part(actividad_economica, '-', 2))) as actividad_economica_description,
+ lower(btrim(split_part(rubro, '-', 1))) as rubro,
+ lower(btrim(split_part(rubro, '-', 2))) as rubro_description,
+ nullif(lower(btrim(split_part(subrubro, '-', 1))), 'sin informacion')::smallint as subrubro,
+ lower(btrim(split_part(subrubro, '-', 2))) as subrubro_description,
+ lower(btrim(tipo_contribuyente)) as tipo_contribuyente,
+ lower(btrim(subtipo_contribuyente)) as subtipo_contribuyente,
+ lower(btrim(bloque)) as bloque,
+ lower(btrim(calle)) as calle,
+ lower(btrim(numero)) as numero,
+ lower(btrim(depto)) as depto,
+ lower(btrim(villa_poblacion)) as villa_poblacion,
+ lower(btrim(comuna)) as comuna,
+ lower(btrim(region)) as region,
+ lower(btrim(ciudad)) as ciudad,
+ nullif(lower(btrim(n_trabajadores)), 'sin informacion')::integer as num_trabajadores,
+ replace(f22_c_645::text, ',', '.')::double precision as f22_c_645,
+ replace(f22_c_646::text, ',', '.')::double precision as f22_c_646
+  from taxes.empresas_pj_at2007
+ union all
+ select
+ "año"::smallint as year,
+ rut::integer as company,
+ dv::varchar(1),
+ fecha_inicio::date as fecha_inicio,
+ fecha_termino_giro::date as fecha_termino_giro,
+ lower(btrim(tipo_termino_giro)) as tipo_termino_giro,
+ lower(btrim(razon_social)) as razon_social,
+ lower(btrim(tramo_ventas)) as tramo_ventas,
+ nullif(lower(btrim(split_part(actividad_economica, '-', 1))), 'sin informacion')::integer as actividad_economica,
+ lower(btrim(split_part(actividad_economica, '-', 2))) as actividad_economica_description,
+ lower(btrim(split_part(rubro, '-', 1))) as rubro,
+ lower(btrim(split_part(rubro, '-', 2))) as rubro_description,
+ nullif(lower(btrim(split_part(subrubro, '-', 1))), 'sin informacion')::smallint as subrubro,
+ lower(btrim(split_part(subrubro, '-', 2))) as subrubro_description,
+ lower(btrim(tipo_contribuyente)) as tipo_contribuyente,
+ lower(btrim(subtipo_contribuyente)) as subtipo_contribuyente,
+ lower(btrim(bloque)) as bloque,
+ lower(btrim(calle)) as calle,
+ lower(btrim(numero)) as numero,
+ lower(btrim(depto)) as depto,
+ lower(btrim(villa_poblacion)) as villa_poblacion,
+ lower(btrim(comuna)) as comuna,
+ lower(btrim(region)) as region,
+ lower(btrim(ciudad)) as ciudad,
+ nullif(lower(btrim(n_trabajadores)), 'sin informacion')::integer as num_trabajadores,
+ replace(f22_c_645::text, ',', '.')::double precision as f22_c_645,
+ replace(f22_c_646::text, ',', '.')::double precision as f22_c_646
+  from taxes.empresas_pj_at2008
+ union all
+ select
+ "año"::smallint as year,
+ rut::integer as company,
+ dv::varchar(1),
+ fecha_inicio::date as fecha_inicio,
+ fecha_termino_giro::date as fecha_termino_giro,
+ lower(btrim(tipo_termino_giro)) as tipo_termino_giro,
+ lower(btrim(razon_social)) as razon_social,
+ lower(btrim(tramo_ventas)) as tramo_ventas,
+ nullif(lower(btrim(split_part(actividad_economica, '-', 1))), 'sin informacion')::integer as actividad_economica,
+ lower(btrim(split_part(actividad_economica, '-', 2))) as actividad_economica_description,
+ lower(btrim(split_part(rubro, '-', 1))) as rubro,
+ lower(btrim(split_part(rubro, '-', 2))) as rubro_description,
+ nullif(lower(btrim(split_part(subrubro, '-', 1))), 'sin informacion')::smallint as subrubro,
+ lower(btrim(split_part(subrubro, '-', 2))) as subrubro_description,
+ lower(btrim(tipo_contribuyente)) as tipo_contribuyente,
+ lower(btrim(subtipo_contribuyente)) as subtipo_contribuyente,
+ lower(btrim(bloque)) as bloque,
+ lower(btrim(calle)) as calle,
+ lower(btrim(numero)) as numero,
+ lower(btrim(depto)) as depto,
+ lower(btrim(villa_poblacion)) as villa_poblacion,
+ lower(btrim(comuna)) as comuna,
+ lower(btrim(region)) as region,
+ lower(btrim(ciudad)) as ciudad,
+ nullif(lower(btrim(n_trabajadores)), 'sin informacion')::integer as num_trabajadores,
+ replace(f22_c_645::text, ',', '.')::double precision as f22_c_645,
+ replace(f22_c_646::text, ',', '.')::double precision as f22_c_646
+  from taxes.empresas_pj_at2009
+ union all
+ select
+ "año"::smallint as year,
+ rut::integer as company,
+ dv::varchar(1),
+ fecha_inicio::date as fecha_inicio,
+ fecha_termino_giro::date as fecha_termino_giro,
+ lower(btrim(tipo_termino_giro)) as tipo_termino_giro,
+ lower(btrim(razon_social)) as razon_social,
+ lower(btrim(tramo_ventas)) as tramo_ventas,
+ nullif(lower(btrim(split_part(actividad_economica, '-', 1))), 'sin informacion')::integer as actividad_economica,
+ lower(btrim(split_part(actividad_economica, '-', 2))) as actividad_economica_description,
+ lower(btrim(split_part(rubro, '-', 1))) as rubro,
+ lower(btrim(split_part(rubro, '-', 2))) as rubro_description,
+ nullif(lower(btrim(split_part(subrubro, '-', 1))), 'sin informacion')::smallint as subrubro,
+ lower(btrim(split_part(subrubro, '-', 2))) as subrubro_description,
+ lower(btrim(tipo_contribuyente)) as tipo_contribuyente,
+ lower(btrim(subtipo_contribuyente)) as subtipo_contribuyente,
+ lower(btrim(bloque)) as bloque,
+ lower(btrim(calle)) as calle,
+ lower(btrim(numero)) as numero,
+ lower(btrim(depto)) as depto,
+ lower(btrim(villa_poblacion)) as villa_poblacion,
+ lower(btrim(comuna)) as comuna,
+ lower(btrim(region)) as region,
+ lower(btrim(ciudad)) as ciudad,
+ nullif(lower(btrim(n_trabajadores)), 'sin informacion')::integer as num_trabajadores,
+ replace(f22_c_645::text, ',', '.')::double precision as f22_c_645,
+ replace(f22_c_646::text, ',', '.')::double precision as f22_c_646
+  from taxes.empresas_pj_at2010
+ union all
+ select
+ "año"::smallint as year,
+ rut::integer as company,
+ dv::varchar(1),
+ fecha_inicio::date as fecha_inicio,
+ fecha_termino_giro::date as fecha_termino_giro,
+ lower(btrim(tipo_termino_giro)) as tipo_termino_giro,
+ lower(btrim(razon_social)) as razon_social,
+ lower(btrim(tramo_ventas)) as tramo_ventas,
+ nullif(lower(btrim(split_part(actividad_economica, '-', 1))), 'sin informacion')::integer as actividad_economica,
+ lower(btrim(split_part(actividad_economica, '-', 2))) as actividad_economica_description,
+ lower(btrim(split_part(rubro, '-', 1))) as rubro,
+ lower(btrim(split_part(rubro, '-', 2))) as rubro_description,
+ nullif(lower(btrim(split_part(subrubro, '-', 1))), 'sin informacion')::smallint as subrubro,
+ lower(btrim(split_part(subrubro, '-', 2))) as subrubro_description,
+ lower(btrim(tipo_contribuyente)) as tipo_contribuyente,
+ lower(btrim(subtipo_contribuyente)) as subtipo_contribuyente,
+ lower(btrim(bloque)) as bloque,
+ lower(btrim(calle)) as calle,
+ lower(btrim(numero)) as numero,
+ lower(btrim(depto)) as depto,
+ lower(btrim(villa_poblacion)) as villa_poblacion,
+ lower(btrim(comuna)) as comuna,
+ lower(btrim(region)) as region,
+ lower(btrim(ciudad)) as ciudad,
+ nullif(lower(btrim(n_trabajadores)), 'sin informacion')::integer as num_trabajadores,
+ replace(f22_c_645::text, ',', '.')::double precision as f22_c_645,
+ replace(f22_c_646::text, ',', '.')::double precision as f22_c_646
+  from taxes.empresas_pj_at2011
+ union all
+ select
+ "año"::smallint as year,
+ rut::integer as company,
+ dv::varchar(1),
+ fecha_inicio::date as fecha_inicio,
+ fecha_termino_giro::date as fecha_termino_giro,
+ lower(btrim(tipo_termino_giro)) as tipo_termino_giro,
+ lower(btrim(razon_social)) as razon_social,
+ lower(btrim(tramo_ventas)) as tramo_ventas,
+ nullif(lower(btrim(split_part(actividad_economica, '-', 1))), 'sin informacion')::integer as actividad_economica,
+ lower(btrim(split_part(actividad_economica, '-', 2))) as actividad_economica_description,
+ lower(btrim(split_part(rubro, '-', 1))) as rubro,
+ lower(btrim(split_part(rubro, '-', 2))) as rubro_description,
+ nullif(lower(btrim(split_part(subrubro, '-', 1))), 'sin informacion')::smallint as subrubro,
+ lower(btrim(split_part(subrubro, '-', 2))) as subrubro_description,
+ lower(btrim(tipo_contribuyente)) as tipo_contribuyente,
+ lower(btrim(subtipo_contribuyente)) as subtipo_contribuyente,
+ lower(btrim(bloque)) as bloque,
+ lower(btrim(calle)) as calle,
+ lower(btrim(numero)) as numero,
+ lower(btrim(depto)) as depto,
+ lower(btrim(villa_poblacion)) as villa_poblacion,
+ lower(btrim(comuna)) as comuna,
+ lower(btrim(region)) as region,
+ lower(btrim(ciudad)) as ciudad,
+ nullif(lower(btrim(n_trabajadores)), 'sin informacion')::integer as num_trabajadores,
+ replace(f22_c_645::text, ',', '.')::double precision as f22_c_645,
+ replace(f22_c_646::text, ',', '.')::double precision as f22_c_646
+  from taxes.empresas_pj_at2012
+ union all
+ select
+ "año"::smallint as year,
+ rut::integer as company,
+ dv::varchar(1),
+ fecha_inicio::date as fecha_inicio,
+ fecha_termino_giro::date as fecha_termino_giro,
+ lower(btrim(tipo_termino_giro)) as tipo_termino_giro,
+ lower(btrim(razon_social)) as razon_social,
+ lower(btrim(tramo_ventas)) as tramo_ventas,
+ nullif(lower(btrim(split_part(actividad_economica, '-', 1))), 'sin informacion')::integer as actividad_economica,
+ lower(btrim(split_part(actividad_economica, '-', 2))) as actividad_economica_description,
+ lower(btrim(split_part(rubro, '-', 1))) as rubro,
+ lower(btrim(split_part(rubro, '-', 2))) as rubro_description,
+ nullif(lower(btrim(split_part(subrubro, '-', 1))), 'sin informacion')::smallint as subrubro,
+ lower(btrim(split_part(subrubro, '-', 2))) as subrubro_description,
+ lower(btrim(tipo_contribuyente)) as tipo_contribuyente,
+ lower(btrim(subtipo_contribuyente)) as subtipo_contribuyente,
+ lower(btrim(bloque)) as bloque,
+ lower(btrim(calle)) as calle,
+ lower(btrim(numero)) as numero,
+ lower(btrim(depto)) as depto,
+ lower(btrim(villa_poblacion)) as villa_poblacion,
+ lower(btrim(comuna)) as comuna,
+ lower(btrim(region)) as region,
+ lower(btrim(ciudad)) as ciudad,
+ nullif(lower(btrim(n_trabajadores)), 'sin informacion')::integer as num_trabajadores,
+ replace(f22_c_645::text, ',', '.')::double precision as f22_c_645,
+ replace(f22_c_646::text, ',', '.')::double precision as f22_c_646
+  from taxes.empresas_pj_at2013
+ union all
+ select
+ "año"::smallint as year,
+ rut::integer as company,
+ dv::varchar(1),
+ fecha_inicio::date as fecha_inicio,
+ fecha_termino_giro::date as fecha_termino_giro,
+ lower(btrim(tipo_termino_giro)) as tipo_termino_giro,
+ lower(btrim(razon_social)) as razon_social,
+ lower(btrim(tramo_ventas)) as tramo_ventas,
+ nullif(lower(btrim(split_part(actividad_economica, '-', 1))), 'sin informacion')::integer as actividad_economica,
+ lower(btrim(split_part(actividad_economica, '-', 2))) as actividad_economica_description,
+ lower(btrim(split_part(rubro, '-', 1))) as rubro,
+ lower(btrim(split_part(rubro, '-', 2))) as rubro_description,
+ nullif(lower(btrim(split_part(subrubro, '-', 1))), 'sin informacion')::smallint as subrubro,
+ lower(btrim(split_part(subrubro, '-', 2))) as subrubro_description,
+ lower(btrim(tipo_contribuyente)) as tipo_contribuyente,
+ lower(btrim(subtipo_contribuyente)) as subtipo_contribuyente,
+ lower(btrim(bloque)) as bloque,
+ lower(btrim(calle)) as calle,
+ lower(btrim(numero)) as numero,
+ lower(btrim(depto)) as depto,
+ lower(btrim(villa_poblacion)) as villa_poblacion,
+ lower(btrim(comuna)) as comuna,
+ lower(btrim(region)) as region,
+ lower(btrim(ciudad)) as ciudad,
+ nullif(lower(btrim(n_trabajadores)), 'sin informacion')::integer as num_trabajadores,
+ replace(f22_c_645::text, ',', '.')::double precision as f22_c_645,
+ replace(f22_c_646::text, ',', '.')::double precision as f22_c_646
+  from taxes.empresas_pj_at2014
+ union all
+ select
+ "año"::smallint as year,
+ rut::integer as company,
+ dv::varchar(1),
+ fecha_inicio::date as fecha_inicio,
+ fecha_termino_giro::date as fecha_termino_giro,
+ lower(btrim(tipo_termino_giro)) as tipo_termino_giro,
+ lower(btrim(razon_social)) as razon_social,
+ lower(btrim(tramo_ventas)) as tramo_ventas,
+ nullif(lower(btrim(split_part(actividad_economica, '-', 1))), 'sin informacion')::integer as actividad_economica,
+ lower(btrim(split_part(actividad_economica, '-', 2))) as actividad_economica_description,
+ lower(btrim(split_part(rubro, '-', 1))) as rubro,
+ lower(btrim(split_part(rubro, '-', 2))) as rubro_description,
+ nullif(lower(btrim(split_part(subrubro, '-', 1))), 'sin informacion')::smallint as subrubro,
+ lower(btrim(split_part(subrubro, '-', 2))) as subrubro_description,
+ lower(btrim(tipo_contribuyente)) as tipo_contribuyente,
+ lower(btrim(subtipo_contribuyente)) as subtipo_contribuyente,
+ lower(btrim(bloque)) as bloque,
+ lower(btrim(calle)) as calle,
+ lower(btrim(numero)) as numero,
+ lower(btrim(depto)) as depto,
+ lower(btrim(villa_poblacion)) as villa_poblacion,
+ lower(btrim(comuna)) as comuna,
+ lower(btrim(region)) as region,
+ lower(btrim(ciudad)) as ciudad,
+ nullif(lower(btrim(n_trabajadores)), 'sin informacion')::integer as num_trabajadores,
+ replace(f22_c_645::text, ',', '.')::double precision as f22_c_645,
+ replace(f22_c_646::text, ',', '.')::double precision as f22_c_646
+  from taxes.empresas_pj_at2015
+ union all
+ select
+ "año"::smallint as year,
+ rut::integer as company,
+ dv::varchar(1),
+ fecha_inicio::date as fecha_inicio,
+ fecha_termino_giro::date as fecha_termino_giro,
+ lower(btrim(tipo_termino_giro)) as tipo_termino_giro,
+ lower(btrim(razon_social)) as razon_social,
+ lower(btrim(tramo_ventas)) as tramo_ventas,
+ nullif(lower(btrim(split_part(actividad_economica, '-', 1))), 'sin informacion')::integer as actividad_economica,
+ lower(btrim(split_part(actividad_economica, '-', 2))) as actividad_economica_description,
+ lower(btrim(split_part(rubro, '-', 1))) as rubro,
+ lower(btrim(split_part(rubro, '-', 2))) as rubro_description,
+ nullif(lower(btrim(split_part(subrubro, '-', 1))), 'sin informacion')::smallint as subrubro,
+ lower(btrim(split_part(subrubro, '-', 2))) as subrubro_description,
+ lower(btrim(tipo_contribuyente)) as tipo_contribuyente,
+ lower(btrim(subtipo_contribuyente)) as subtipo_contribuyente,
+ lower(btrim(bloque)) as bloque,
+ lower(btrim(calle)) as calle,
+ lower(btrim(numero)) as numero,
+ lower(btrim(depto)) as depto,
+ lower(btrim(villa_poblacion)) as villa_poblacion,
+ lower(btrim(comuna)) as comuna,
+ lower(btrim(region)) as region,
+ lower(btrim(ciudad)) as ciudad,
+ nullif(lower(btrim(n_trabajadores)), 'sin informacion')::integer as num_trabajadores,
+ replace(f22_c_645::text, ',', '.')::double precision as f22_c_645,
+ replace(f22_c_646::text, ',', '.')::double precision as f22_c_646
+  from taxes.empresas_pj_at2016
+ union all
+ select
+  2016 as year,
+  rut::integer as company,
+  dv::varchar(1),
+ fecha_inicio::date as fecha_inicio,
+ fecha_termino_giro::date as fecha_termino_giro,
+ lower(btrim(tipo_termino_giro)) as tipo_termino_giro,
+  lower(btrim(razon_social)) as razon_social,
+  lower(btrim(tramo_ventas)) as tramo_ventas,
+  nullif(lower(btrim(split_part(actividad_economica, '-', 1))), 'sin informacion')::integer as actividad_economica,
+  lower(btrim(split_part(actividad_economica, '-', 2))) as actividad_economica_description,
+  lower(btrim(split_part(rubro, '-', 1))) as rubro,
+  lower(btrim(split_part(rubro, '-', 2))) as rubro_description,
+  nullif(lower(btrim(split_part(subrubro, '-', 1))), 'sin informacion')::smallint as subrubro,
+  lower(btrim(split_part(subrubro, '-', 2))) as subrubro_description,
+  lower(btrim(tipo_contribuyente)) as tipo_contribuyente,
+  lower(btrim(subtipo_contribuyente)) as subtipo_contribuyente,
+  lower(btrim(bloque)) as bloque,
+  lower(btrim(calle)) as calle,
+  lower(btrim(numero)) as numero,
+  lower(btrim(depto)) as depto,
+  lower(btrim(villa_poblacion)) as villa_poblacion,
+  lower(btrim(comuna)) as comuna,
+  lower(btrim(region)) as region,
+  NULL::varchar as ciudad,
+  nullif(lower(btrim(n_trabajadores)), 'sin informacion')::integer as num_trabajadores,
+  replace(f22_c_645::text, ',', '.')::double precision as f22_c_645,
+  replace(f22_c_646::text, ',', '.')::double precision as f22_c_646
+ from taxes.empresas_pj_at2017
+ );
+
+ comment on table cleaned.companies_taxes is 'tax data readily available to the public';
+
+ create index concurrently companies_taxes_company_ix on cleaned.companies_taxes(company desc nulls last) ;
+ create index concurrently "companies_taxes_year_ix" on cleaned.companies_taxes(year asc);
+ create index concurrently "companies_taxes_company_year_ix" on cleaned.companies_taxes(company, year);
+ #+END_SRC
+
+ #+RESULTS:
+
+ #+BEGIN_SRC sql
+  set role direccion_trabajo_inspections_write;
+
+  select to_char(count(distinct company), '999,999,990') as companies from cleaned.companies_taxes;
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ | companies |
+ |-----------|
+ | 753,476   |
+ :END:
+
+ #+BEGIN_SRC sql
+  set role direccion_trabajo_inspections_write;
+
+  select
+      year, to_char(count(distinct company), '999,999,990') as companies
+  from
+      cleaned.companies_taxes
+  group by year;
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ | year | companies |
+ |------+-----------|
+ | 2005 | 235,051   |
+ | 2006 | 247,281   |
+ | 2007 | 259,941   |
+ | 2008 | 272,280   |
+ | 2009 | 286,421   |
+ | 2010 | 302,095   |
+ | 2011 | 324,627   |
+ | 2012 | 354,138   |
+ | 2013 | 387,844   |
+ | 2014 | 426,331   |
+ | 2015 | 460,531   |
+ | 2016 | 489,170   |
+ :END:
+
+
+*** Companies addresses (Including facilities)
+
+**** Update in November 9th 2018
+
+ This dataset was suggested by Claudio , it can be downloaded from [[www.sii.cl/estadisticas/nominas/nominapersonasjuridicas.htm][here]]
+
+ The description (from the website) is:
+
+ #+BEGIN_QUOTE
+ *Nómina de direcciones de contribuyentes personas jurídicas*
+
+ Listado de todos los contribuyentes personas jurídicas, junto al
+ listado de todas las direcciones registradas (Casa Matriz/Sucursal)
+ vigentes a la fecha de publicación de los datos.
+ #+END_QUOTE
+
+ Supposedly, it contains the total number of companies (/casa matriz/) and
+ facilities (/sucursales/) with addresses.
+
+ #+BEGIN_SRC sql
+ set role direccion_trabajo_inspections_write;
+
+ create table raw.nomina_pj_dir (
+         rut varchar,
+         dv varchar(1),
+         razon_social varchar,
+         tipo varchar,
+         calle varchar,
+         numero varchar,
+         bloque varchar,
+         depto varchar,
+         villa varchar,
+         ciudad varchar,
+         comuna varchar,
+         region varchar
+ );
+ #+END_SRC
+
+ #+RESULTS:
+
+
+ #+BEGIN_SRC sh :dir ./data
+ < Nomina_PJ_Dir.csv | psql service=dt -c "set role direccion_trabajo_inspections_write; copy raw.nomina_pj_dir from stdin with csv header delimiter E';' NULL '' ENCODING 'iso-8859-1'"
+ #+END_SRC
+
+ Now, let's move the table to the clean
+
+ #+BEGIN_SRC sql
+ create table cleaned.companies_addresses as (
+     select
+         rut::integer as company,
+         btrim(lower(dv)) as dv,
+         btrim(lower(razon_social)) as company_name,
+         case when tipo = 'DOMICILIO' then 'company' else 'facility' end as type,
+         lower(btrim(calle)) as street,
+         lower(btrim(numero)) as number,
+         lower(btrim(bloque)) as bloque,
+         lower(btrim(depto)) as depto,
+         lower(btrim(villa)) as villa,
+         lower(btrim(ciudad)) as city,
+         lower(btrim(comuna)) as comuna,
+         lower(btrim(region)) as region
+     from
+         raw.nomina_pj_dir
+ );
+
+ create index companies_addresses_company_ix on cleaned.companies_addresses(company);
+ create index companies_addresses_type_ix on cleaned.companies_addresses(type);
+ #+END_SRC
+
+ #+RESULTS:
+
+
+*** Fiscalizaciones (/inspections/)
+
+
+ Data regarding inspections is divided in two main tables in
+ =raw.dt_fi_ingreso_fiscalizacion= and in =raw.dt_fi_informefiscalizacion=
+ The former has rows when the inspection is "triggered" (most of the times by a
+ worker, but other means exists) and the latter
+ contains rows describing the actual inspection.
+
+ We will remove rows that have a invalid =rut= (company id). A *valid RUT*
+ /must/ be 8 characters long.
+
+ #+BEGIN_SRC sql :async
+ create table cleaned.dt_fi_ingreso_fiscalizacion as
+ select
+     *
+ from
+     raw.dt_fi_ingreso_fiscalizacion
+ where
+     char_length(btrim(emprut::text)) = 8;
+
+
+ create index dt_fi_ingreso_fiscalizacion_emprut_ix on cleaned.dt_fi_ingreso_fiscalizacion(emprut);
+ #+END_SRC
+
+ #+RESULTS:
+
+
+ #+BEGIN_SRC sql :async
+ create table cleaned.dt_fi_informefiscalizacion as
+ select
+     *
+ from
+     raw.dt_fi_informefiscalizacion
+ where
+     char_length(btrim(rutempresa::text)) = 8;
+
+ create index dt_fi_informefiscalizacion_emprut_ix on cleaned.dt_fi_informefiscalizacion(rutempresa);
+ #+END_SRC
+
+ #+RESULTS:
+
+ #+BEGIN_SRC sql :async
+ select 'raw.dt_fi_informefiscalizacion' as "table", to_char(count(*), '999,999,990') from raw.dt_fi_informefiscalizacion
+ union
+ select 'cleaned.dt_fi_informefiscalizacion', to_char(count(*), '999,999,990') from cleaned.dt_fi_informefiscalizacion
+ union
+ select 'raw.dt_fi_ingreso_fiscalizacion', to_char(count(*), '999,999,990') from raw.dt_fi_ingreso_fiscalizacion
+ union
+ select 'cleaned.dt_fi_ingreso_fiscalizacion', to_char(count(*), '999,999,990') from cleaned.dt_fi_ingreso_fiscalizacion;
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ | table                            | to_char    |
+ |----------------------------------+-----------|
+ | cleaned.dt_fi_informefiscalizacion | 2,086,162 |
+ | cleaned.dt_fi_ingreso_fiscalizacion | 1,966,686 |
+ | raw.dt_fi_informefiscalizacion     | 2,684,127 |
+ | raw.dt_fi_ingreso_fiscalizacion     | 2,803,056 |
+ :END:
+
+
+ #+BEGIN_SRC sql
+ select count(distinct rutempresa) from cleaned.dt_fi_informefiscalizacion
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ |  count |
+ |--------|
+ | 277137 |
+ :END:
+
+ #+BEGIN_SRC sql
+ select count(distinct emprut) from cleaned.dt_fi_ingreso_fiscalizacion
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ |  count |
+ |--------|
+ | 264963 |
+ :END:
+
+
+
+*** Sanity check
+
+ In theory, /all/ the *inspected facilities* belong to companies that are
+ in the union of =cleaned.companies_addresses= and
+ =cleanes.companies_taxes=.
+
+ The *inspected facilities* are in =raw.dt_fi_ingreso_fiscalizacion=
+ (=emprut=) and in =raw.dt_fi_informefiscalizacion= (=rutempresa=)
+
+
+ #+BEGIN_SRC sql
+ select
+     to_char(count(distinct rutempresa), '999,990') as cnt
+ from cleaned.dt_fi_informefiscalizacion as informe
+ where not exists (
+     select
+         1
+     from
+         cleaned.dt_fi_ingreso_fiscalizacion as ingreso
+     where
+         informe.rutempresa = ingreso.emprut
+ )
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ | cnt    |
+ |--------|
+ | 19,216 |
+ :END:
+
+ #+BEGIN_SRC sql
+ select
+     to_char(count(distinct emprut), '999,990') as cnt
+ from cleaned.dt_fi_ingreso_fiscalizacion as ingreso
+ where not exists (
+     select
+         1
+     from
+         cleaned.dt_fi_informefiscalizacion as informe
+     where
+         informe.rutempresa = ingreso.emprut
+ )
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ | cnt   |
+ |-------|
+ | 7,042 |
+ :END:
+
+ Well, as I said: /In theory .../
+
+
+*** Lookup tables
+
+**** Regions
+
+  #+BEGIN_SRC sql
+
+  drop table if exists cleaned.regions;
+
+  create table cleaned.regions (
+    region smallint,
+    description text,
+    number text,
+    "ISO_3166_2_CL" text,
+    num_provincias smallint,
+    num_comunas smallint
+  );
+
+  insert into cleaned.regions values
+      (15,'arica y parinacota','xv', 'CL-AP',2,4),
+	  (1,'tarapacá','i', 'CL-TA', 2,7),
+	  (2,'antofagasta','ii','CL-AN',3,9),
+	  (3,'atacama ','iii', 'CL-AT',3,9),
+	  (4,'coquimbo ','iv','CL-CO', 3,15),
+	  (5,'valparaíso ','v', 'CL-VS', 8,38),
+	  (6,'del libertador gral. bernardo ohiggins','vi', 'CL-LI',3,33),
+	  (7,'del maule','vii', 'CL-ML',4,30),
+	  (8,'del biobío ','viii','CL-BI',4,54),
+	  (9,'de la araucanía','ix','CL-AR',2,32),
+	  (14,'de los ríos','xiv', 'CL-LR',2,12),
+	  (10,'de los lagos','x', 'CL-LL',4,30),
+	  (11,'aisén del gral. carlos ibañez del campo ','xi', 'CL-AI',4,10),
+	  (12,'magallanes y de la antártica chilena','xii','CL-MA',4,11),
+      (13,'metropolitana de santiago','xiii', 'CL-RM',6,52);
+  #+END_SRC
+
+  #+RESULTS:
+
+**** Comunas
+
+ #+BEGIN_SRC sql
+ drop table if exists cleaned.comunas;
+
+ create table cleaned.comunas as (
+     select
+         codigo as comuna,
+         btrim(lower(glosa)) as name,
+         codprovincia as provincia,
+         region as region
+ from raw.comunaglosa
+ )
+ #+END_SRC
+
+ #+RESULTS:
+
+
+** Semantic schema
+
+*** REVIEW Companies
+
+ #+BEGIN_SRC sql :async :tangle sql/etl_dump_semantic.sql
+ drop table if exists semantic.companies;
+
+ create table semantic.companies as (
+
+ with addresses as (
+ select
+     company,
+     dv,
+     company_name as name,
+     street,
+     number,
+     bloque,
+     depto,
+     villa,
+     city,
+     c2.comuna as comuna,
+     c2.region as region,
+     'companies_addresses'::text as origen
+ from
+     cleaned.companies_addresses as c1
+     left join
+     cleaned.comunas as c2 on unaccent(c2.name) = btrim(lower(c1.comuna))
+ where type = 'company'
+     ),
+
+ taxes as (
+ select distinct on (company)
+     company,
+     dv,
+     razon_social as name,
+     fecha_inicio as start_date,
+     fecha_termino_giro as termination_date,
+     tipo_termino_giro as termination_reason,
+     tramo_ventas,
+     actividad_economica as economic_activity,
+     actividad_economica_description as economic_activity_description,
+     rubro,
+     rubro_description,
+     subrubro,
+     subrubro_description,
+     tipo_contribuyente,
+     subtipo_contribuyente,
+     calle as street,
+     numero as number,
+     bloque,
+     depto,
+     villa_poblacion as villa,
+     ciudad as city,
+     c2.comuna as comuna,
+     c2.region as region,
+     'companies_taxes'::text as origen
+ from
+     cleaned.companies_taxes as c1
+     left join
+     cleaned.comunas as c2 on unaccent(c2.name) = btrim(lower(c1.comuna))
+ order by
+ company, year desc
+ ),
+
+ companies as (
+ select
+     coalesce(a.company, b.company) as company,
+     coalesce(a.dv, b.dv) as dv,
+     coalesce(a.name, b.name) as name,
+     start_date,
+     termination_date,
+     termination_reason,
+     tramo_ventas,
+     economic_activity,
+     economic_activity_description,
+     rubro,
+     rubro_description,
+     subrubro,
+     subrubro_description,
+     tipo_contribuyente,
+     subtipo_contribuyente,
+     coalesce(a.street,b.street) as street,
+     coalesce(a.number, b.number) as number,
+     coalesce(a.bloque, b.bloque) as bloque,
+     coalesce(a.depto, b.depto) as depto,
+     coalesce(a.villa, b.villa) as villa,
+     coalesce(a.city, b.city) as city,
+     coalesce(a.comuna, b.comuna) as comuna,
+     coalesce(a.region, b.region) as region,
+     case when a.origen is not null and b.origen is not null then 'taxes data' else coalesce(a.origen, b.origen) end as origen
+ from
+     addresses as a
+     full outer join
+     taxes as b
+ using (company)
+
+ ),
+
+ inspected as (
+ select
+     distinct on (company)
+     company,
+     dv,
+     name,
+     address,
+     comuna,
+     company_legal_contact,
+     company_legal_contact_dv,
+     company_legal_contact_names,
+     origen
+ from (
+     select
+         coalesce(a.idfiscalizacion, b.idfiscalizacion) as idfiscalizacion,
+         coalesce(a.rutempresa, b.emprut) as company,
+         coalesce(a.dvempresa, b.empdv) as dv,
+         btrim(lower(coalesce(razonsocialempresa, emprazonsocial))) as name,
+         nullif(btrim(lower(coalesce(empdmdireccion, empdireccion))),'') as address,
+         coalesce(empdmcodcomuna, empcodcomuna) as comuna,
+         replrut as company_legal_contact,
+         repldv as company_legal_contact_dv,
+         nullif(btrim(lower(replnombres)),'') as company_legal_contact_names,
+         case when a.rutempresa is not null and b.emprut is not null then 'inspections data'
+         when a.rutempresa is null then 'ingreso_fiscalizacion'
+         when b.emprut is null then 'informe_fiscalizacion'
+         end as origen
+     from
+         cleaned.dt_fi_informefiscalizacion as a
+         full outer join
+         cleaned.dt_fi_ingreso_fiscalizacion as b
+         using (idfiscalizacion)
+         ) as t
+ order by company, idfiscalizacion desc
+     )
+
+
+ select
+     coalesce(a.company, b.company) as company,
+     coalesce(a.dv, b.dv) as dv,
+     coalesce(a.name, b.name) as name,
+     start_date,
+     termination_date,
+     case when termination_date is null or termination_date > start_date then
+     daterange(start_date, termination_date)
+     else daterange(termination_date, start_date) end as lifespan,
+     termination_reason,
+     tramo_ventas,
+     economic_activity,
+     economic_activity_description,
+     rubro,
+     rubro_description,
+     subrubro,
+     subrubro_description,
+     tipo_contribuyente,
+     subtipo_contribuyente,
+     company_legal_contact as legal_contact,
+     company_legal_contact_dv as legal_contact_dv,
+     company_legal_contact_names as legal_contact_names,
+     coalesce(a.street || a.number || a.bloque || a.depto, b.address) as address,
+     villa,
+     city,
+     coalesce(a.comuna, b.comuna) as comuna,
+     region,
+     case when a.origen is not null and b.origen is not null then 'all' else coalesce(a.origen, b.origen) end as origen
+ from companies as a
+     full outer join
+     inspected as b
+     using (company)
+
+ );
+
+ -- TODO: Potentially is an error in region, I should join with the regions lookup table instead of using comuna lookup table
+ #+END_SRC
+
+ #+RESULTS:
+
+
+ #+BEGIN_SRC sql :async :tangle sql/etl_dump_semantic.sql
+ create index concurrently companies_company_ix on semantic.companies(company desc nulls last) ;
+ create index concurrently companies_company_start_date_ix on semantic.companies(company, start_date);
+ create index concurrently companies_company_start_date_termination_date_ix on semantic.companies(company, start_date, termination_date);
+ create index companies_lifespan_ix on semantic.companies using gist(lifespan);
+ -- TODO: Fix nulls in the =start_date= maybe use the min date on inspections?
+ #+END_SRC
+
+ #+RESULTS:
+
+ Resulting in:
+
+ #+BEGIN_SRC sql :async
+ select
+     coalesce(origen, 'Total') as origen,
+     to_char(count(*), '999,999,990') as number_of_companies
+ from semantic.companies
+ group by rollup(origen);
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ | origen               | number_of_companies |
+ |----------------------+-------------------|
+ | all                  | 181,325           |
+ | companies_addresses   | 554,994           |
+ | companies_taxes       | 91,605            |
+ | informe_fiscalizacion | 11,833            |
+ | ingreso_fiscalizacion | 2,893             |
+ | inspections data     | 86,564            |
+ | taxes data           | 497,224           |
+ | Total                | 1,426,438         |
+ :END:
+
+
+*** REVIEW Facilities <<sec:facilities_record_linkage>>
+
+ The /facility/ is the place where an inspection occurs. A /facility/
+ belongs to a /company/.
+ We will use the data from =cleaned.dt_informefiscalizacion= and from
+ =cleaned.companies_addresses= to create the =semantic.facilities= table.
+
+Our facilities will be stored in the following table
+
+
+   #+BEGIN_SRC sql :tangle sql/etl_dump_semantic.sql
+
+   set role direccion_trabajo_inspections_write;
+
+   drop table if exists semantic.facilities cascade;
+
+   create table semantic.facilities (
+           facility serial,
+           company integer,
+           comuna smallint,
+           region smallint,
+           address text,
+           cleaned_address text,
+           original_facility_id integer
+
+   );
+  #+END_SRC
+
+  #+RESULTS:
+
+
+
+
+**** Record Linkage
+
+The first problem that we face, is that the facilities doesn't have
+any unique identifier in the data provided for *DT*, so, we need to
+create a way to identify them. As a first approximation we will assume
+that a facility in the inspections data is identified by (=rutempresa=,
+=empdfdireccion= and =empdfcomuna=). The =empdfdireccion= is dirty, so we
+need to do some cleaning (removing accents, punctuation, spaces, etc)
+
+ #+BEGIN_SRC sql :async
+ drop table if exists cleaned.facilities_inspected;
+
+ create table  cleaned.facilities_inspected as (
+     select distinct on (rutempresa, empdfcodcomuna,  btrim(unaccent(regexp_replace(regexp_replace(regexp_replace(lower(empdfdireccion), '(s/n.)|(depto)|[0-9]*|nº', '', 'g'), '[^\w\s]|_', '', 'g'), '\s{2,}', ' ', 'g' ))))
+         -- row_number() over (order by rutempresa::integer) as facility,
+         rutempresa::integer as company,
+         c.comuna as comuna,
+         c.region as region,
+         btrim(lower(empdfdireccion)) as original_address,
+         btrim(unaccent(regexp_replace(regexp_replace(regexp_replace(lower(empdfdireccion), '(s/n.)|(depto)|[0-9]*|nº', '', 'g'), '[^\w\s]|_', '', 'g'), '\s{2,}', ' ', 'g' ))) as address
+     from
+         cleaned.dt_fi_informefiscalizacion as f
+         left join
+         cleaned.comunas as c on f.empdfcodcomuna = c.comuna
+     order by
+         rutempresa,
+         empdfcodcomuna,
+         btrim(unaccent(regexp_replace(regexp_replace(regexp_replace(lower(empdfdireccion), '(s/n.)|(depto)|[0-9]*|nº', '', 'g'), '[^\w\s]|_', '', 'g'), '\s{2,}', ' ', 'g' ))),
+         fechainforme desc -- We sorted them, the most recent inspection to the top
+         );
+
+-- create index facilities_inspected_facility_ix on cleaned.facilities_inspected(facility);
+ create index facilities_inspected_company_ix on cleaned.facilities_inspected(company);
+ create index facilities_inspected_comuna_ix on cleaned.facilities_inspected(comuna);
+ create index facilities_inspected_company_comuna_ix on cleaned.facilities_inspected(company, comuna);
+
+ #+END_SRC
+
+ #+RESULTS:
+
+
+#+BEGIN_SRC sql :async
+drop table if exists cleaned.facilities_addresses;
+
+create table  cleaned.facilities_addresses as (
+    select
+        -- row_number() over (order by rutempresa::integer) as facility,
+        company,
+        c.comuna as comuna,
+        c.region as region,
+        btrim(lower(format('%s %s %s %s', street, number, bloque, depto))) as original_address,
+        btrim(unaccent(regexp_replace(regexp_replace(regexp_replace(lower(format('%s %s %s %s', street, number, bloque, depto)), '(s/n.)|(depto)|[0-9]*|nº', '', 'g'), '[^\w\s]|_', '', 'g'), '\s{2,}', ' ', 'g' ))) as address
+    from
+        cleaned.companies_addresses as f
+        left join
+        cleaned.comunas as c on unaccent(f.comuna) = unaccent(c.name)
+    where
+        type = 'facility'
+        );
+
+-- create index facilities_addresses_facility_ix on cleaned.facilities_addresses(facility);
+create index facilities_addresses_company_ix on cleaned.facilities_addresses(company);
+create index facilities_addresses_comuna_ix on cleaned.facilities_addresses(comuna);
+create index facilities_addresses_company_comuna_ix on cleaned.facilities_addresses(company, comuna);
+
+#+END_SRC
+
+#+RESULTS:
+
+
+#+BEGIN_SRC sql :async
+drop table if exists cleaned.facilities_universe;
+
+create table cleaned.facilities_universe as (
+    select row_number() over (order by company) as facility, *
+    from (
+            (select * from cleaned.facilities_addresses)
+        union all
+            (select * from cleaned.facilities_inspected)
+            ) as t
+        );
+
+ create index facilities_facility_universe_ix on cleaned.facilities_universe(facility);
+ create index facilities_company_universe_ix on cleaned.facilities_universe(company);
+ create index facilities_comuna_universe_ix on cleaned.facilities_universe(comuna);
+ create index facilities_company_comuna_universe_ix on cleaned.facilities_universe(company, comuna);
+
+
+#+END_SRC
+
+
+
+ #+BEGIN_SRC sql :async
+ select
+     to_char(count(*), '999,999,990') as facilities
+ from
+     cleaned.facilities_universe;
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ | facilities |
+ |------------|
+ | 1,402,906  |
+ :END:
+
+Then we will create pairs of those facilities and calculate
+similarities between the addresses of facilities that belong to the
+same company and are in the same comuna:
+
+ #+BEGIN_SRC sql :async
+ drop table if exists cleaned.facilities_pairs;
+
+ create table cleaned.facilities_pairs as (
+ select
+   a.company as company,
+   a.comuna as comuna,
+   a.facility as left_facility,
+   b.facility as right_facility,
+   similarity(a.address, b.address) as similarity
+ from
+     cleaned.facilities_universe as a
+ inner join
+     cleaned.facilities_universe as b
+ using (company, comuna) -- blocks
+ where a.facility != b.facility and a.facility <= b.facility
+ );
+
+ create index facilities_pairs_company_ix on cleaned.facilities_pairs(company);
+ create index facilities_pairs_comuna_ix on cleaned.facilities_pairs(comuna);
+ create index facilities_pairs_company_comuna_ix on cleaned.facilities_pairs(company, comuna);
+ create index facilities_pairs_left_facility_ix on cleaned.facilities_pairs(left_facility);
+ create index facilities_pairs_right_facility_ix on cleaned.facilities_pairs(right_facility);
+ create index facilities_pairs_similarity_ix on cleaned.facilities_pairs(similarity);
+ create index facilities_pairs_left_facility_right_facility_ix on cleaned.facilities_pairs(left_facility, right_facility);
+ create index facilities_pairs_all_ix on cleaned.facilities_pairs(left_facility, right_facility, similarity);
+ #+END_SRC
+
+ #+RESULTS:
+
+ #+BEGIN_SRC sql :async
+ select
+     to_char(count(*), '999,999,990') as facilities
+ from
+     cleaned.facilities_pairs;
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ | facilities |
+ |------------|
+ | 6,192,845  |
+ :END:
+
+The distribution of the similarity is score is:
+
+ #+BEGIN_SRC sql :async
+ with histogram as (
+ select width_bucket(similarity, 0, 1, 9) as bucket,
+     numrange(round(min(similarity)::numeric,1), round(max(similarity)::numeric,1), '[]') as range,
+     count(*) as freq
+ from cleaned.facilities_pairs
+ group by bucket
+ order by bucket
+ )
+ select bucket, range, to_char(freq, '999,999,990') as freq,
+     repeat('■',
+         (   freq::float
+             / max(freq) over()
+             * 25
+             )::int
+         ) as bar
+ from histogram;
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ | bucket | range     | freq      | bar                       |
+ |--------+-----------+-----------+---------------------------|
+ |      1 | [0.0,0.1] | 3,792,725 | ■■■■■■■■■■■■■■■■■■■■■■■■■ |
+ |      2 | [0.1,0.2] | 522,977   | ■■■                       |
+ |      3 | [0.2,0.3] | 364,280   | ■■                        |
+ |      4 | [0.3,0.4] | 352,166   | ■■                        |
+ |      5 | [0.4,0.6] | 322,602   | ■■                        |
+ |      6 | [0.6,0.7] | 279,475   | ■■                        |
+ |      7 | [0.7,0.8] | 250,948   | ■■                        |
+ |      8 | [0.8,0.9] | 166,234   | ■                         |
+ |      9 | [0.9,1.0] | 39,875    |                           |
+ |     10 | [1.0,1.0] | 101,563   | ■                         |
+ :END:
+
+After some manual inspection, we decided to use a =0.4= threshold
+(i.e. everything above =0.4= is considered the same facility)
+
+ #+BEGIN_SRC sql :async
+ select
+     to_char(count(*), '999,999,990') as facilities
+ from
+     cleaned.facilities_pairs
+ where
+     similarity >= 0.4
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ | facilities |
+ |------------|
+ | 1,301,071  |
+ :END:
+
+Finally, we need to recover all the transitive relationships (i.e.
+$A \sim B \cup B \sim C \implies  A \sim C$.
+
+Observe the following sample from =cleaned.facilities_pairs=
+
+#+BEGIN_SRC sql :async
+
+select
+    *
+from
+    cleaned.facilities_pairs
+where left_facility in (3,22,23, 26, 27, 28,  50, 51)
+and similarity >= 0.4
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+|  company | comuna | left_facility | right_facility | similarity |
+|----------+--------+--------------+---------------+------------|
+| 10000027 |   5106 |            3 |             4 |   0.482759 |
+| 10000273 |   7301 |           22 |            27 |        0.5 |
+| 10000273 |   7301 |           22 |            28 |   0.416667 |
+| 10000273 |   7301 |           23 |            24 |       0.44 |
+| 10000273 |   7301 |           23 |            25 |   0.407407 |
+| 10000273 |   7301 |           26 |            27 |       0.55 |
+| 10000273 |   7301 |           26 |            28 |        0.4 |
+| 10000273 |   7301 |           27 |            28 |       0.76 |
+| 10000742 |  10201 |           50 |            51 |   0.615385 |
+| 10000742 |  10201 |           50 |            52 |   0.846154 |
+| 10000742 |  10201 |           50 |            53 |        0.6 |
+| 10000742 |  10201 |           50 |            54 |   0.678571 |
+| 10000742 |  10201 |           51 |            52 |   0.727273 |
+| 10000742 |  10201 |           51 |            53 |   0.727273 |
+| 10000742 |  10201 |           51 |            54 |   0.761905 |
+| 10000742 |  10201 |           51 |            55 |   0.454545 |
+:END:
+
+Looking at the =cleaned.facilities_universe= table:
+
+#+BEGIN_SRC sql
+select * from cleaned.facilities_universe where facility in (23,24,25)
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+| facility |  company | comuna | region | original_address               | address                      |
+|----------+----------+--------+--------+-------------------------------+------------------------------|
+|       23 | 10000273 |   7301 |      7 | los niches                    | los niches                   |
+|       24 | 10000273 |   7301 |      7 | sector la obra los niches     | sector la obra los niches    |
+|       25 | 10000273 |   7301 |      7 | sector la obra los niches s/n | sector la obra los niches sn |
+:END:
+
+But obviously, this /matching/ is not perfect:
+
+#+BEGIN_SRC sql
+select * from cleaned.facilities_universe where facility in (50,51,52,53,54,55)
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+| facility |  company | comuna | region | original_address                         | address                      |
+|----------+----------+--------+--------+-----------------------------------------+------------------------------|
+|       50 | 10000742 |  10201 |     10 | dep. francisco gomez gonzalez 772 depto | dep francisco gomez gonzalez |
+|       51 | 10000742 |  10201 |     10 | francisco gomez 72 depto                | francisco gomez              |
+|       52 | 10000742 |  10201 |     10 | francisco gomez gonzalez 772 depto      | francisco gomez gonzalez     |
+|       53 | 10000742 |  10201 |     10 | francisco gomez gonzlaez 772 depto      | francisco gomez gonzlaez     |
+|       54 | 10000742 |  10201 |     10 | francisco gomez gonzlez 772 depto       | francisco gomez gonzlez      |
+|       55 | 10000742 |  10201 |     10 | francisco silva 958 depto               | francisco silva              |
+:END:
+
+
+
+The table =cleaned.facilities_pairs= represents a /graph/, in the format
+of a /edges list/. We can frame the problem that we want solve as
+/find all the connected components/ (i.e. disjoint graphs) in the graph:
+
+#+BEGIN_SRC dot :file ./images/record_linkage_graph.png :results org file
+graph {
+      3 -- 4;
+      22 -- 27;
+      22 -- 28;
+      23 -- 24;
+      23 -- 25;
+      26 -- 27;
+      26 -- 28;
+      27 -- 28;
+      50 -- 51;
+      50 -- 52;
+      50 -- 53;
+      50 -- 54;
+      51 -- 52;
+      51 -- 53;
+      51 -- 54;
+      51 -- 55;
+}
+#+END_SRC
+
+#+RESULTS:
+#+BEGIN_SRC org
+[[file:./images/record_linkage_graph.png]]
+#+END_SRC
+
+#+CAPTION: Connected components from the table =cleaned.facilities_pairs= with a threshold of 0.4. Each component represents a facility. Note the complext structure of the =50='s node subgraph.
+#+ATTR_ORG: :width 200px
+[[./images/record_linkage_graph.png]]
+
+
+One way of finding the connected components, is using Depth-First
+Search. We will implement it in =python= as follows:
+
+#+BEGIN_SRC ipython
+graph[22]
+#+END_SRC
+
+#+RESULTS:
+: # Out[12]:
+: : [27, 28]
+
+#+BEGIN_SRC ipython
+graph[28]
+#+END_SRC
+
+#+RESULTS:
+: # Out[8]:
+: : [51, 52, 53, 54]
+
+#+BEGIN_SRC ipython
+import sqlalchemy
+
+import pandas as pd
+
+from collections import defaultdict
+
+engine = sqlalchemy.create_engine('postgresql://@/?service=dt')
+
+df = pd.read_sql('select left_facility as n1, right_facility as n2 from cleaned.facilities_pairs where similarity >= 0.4', engine)
+
+graph = df.\
+    groupby('n1')\
+    .n2\
+    .apply(list)\
+    .reset_index()\
+    .set_index('n1')\
+    .to_dict()['n2']
+
+connected_components = defaultdict(set)
+
+
+def dfs(node):
+     global connected_components, graph
+     if node not in connected_components:
+          # this is important, so neighbors won't try to traverse current node
+          connected_components[node] = set()
+          for next_ in graph.get(node, []):
+               dfs(next_)
+               # according the recursive assumption, connected_component of `next_` is also the one of `node`
+               connected_components[node] = connected_components[next_]
+
+          # all that's left is add the current node
+          connected_components[node].add(node)
+
+
+for node_ in graph:
+    dfs(node_)
+
+
+unique_connected_components = set(map(tuple, connected_components.values()))
+
+len(unique_connected_components)
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+# Out[2]:
+: 243425
+:END:
+
+We will store the /connected_components/ (Remember each one represents a
+unique facility) in the following table
+
+#+BEGIN_SRC sql :async
+
+drop table if exists cleaned.facilities_matches;
+
+create table cleaned.facilities_matches (
+        match integer,
+        facilities_ids int []
+);
+
+
+#+END_SRC
+
+#+RESULTS:
+
+Let's copy the connected components to a file
+
+#+BEGIN_SRC  ipython
+def lst2pgarr(alist):
+     return '{' + ','.join(alist) + '}'
+
+
+matches_df = pd.DataFrame({'facilities_ids': list(unique_connected_components)})
+
+matches_df['facilities_ids'] = matches_df.facilities_ids.apply(list)
+
+matches_df['facilities_ids'] = matches_df.facilities_ids.apply(lambda x: lst2pgarr([str(y) for y in x]))
+
+import csv
+matches_df.to_csv("data/facilities_matches.csv", index=True, header=True, sep="|", quotechar="\"", quoting=csv.QUOTE_ALL)
+
+#+END_SRC
+
+#+RESULTS:
+: # Out[5]:
+
+Lastly, let's copy the contents of the file to the table
+=cleaned.facilities_matches=
+
+#+BEGIN_SRC sh :dir ./data
+< facilities_matches.csv | psql service=dt -c "copy cleaned.facilities_matches from stdin with csv header delimiter E'|' NULL ''"
+#+END_SRC
+
+#+RESULTS:
+#+BEGIN_SRC org
+Expanded display is used automatically.
+Null display is "¤".
+Line style is unicode.
+Unicode border line style is "single".
+Unicode column line style is "single".
+Unicode header line style is "double".
+SET
+Timing is on.
+COPY 243425
+Time: 106.370 ms
+#+END_SRC
+
+#+BEGIN_SRC sql :async
+create index facilities_matches_match_ix on cleaned.facilities_matches(match);
+create index facilities_matches_facilities_ids_ix on cleaned.facilities_matches using gin ("facilities_ids");
+#+END_SRC
+
+
+We can verify that we recover the connected component shown before
+
+#+BEGIN_SRC sql
+ select * from cleaned.facilities_matches where facilities_ids @>  ARRAY [22];
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+| match | facilities_ids |
+|-------+---------------|
+|  8549 | {26,27,28,22} |
+:END:
+
+as expected.
+
+Checking the "error" found before:
+
+#+BEGIN_SRC sql
+ select * from cleaned.facilities_matches where facilities_ids @>  ARRAY [50];
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+|  match | facilities_ids |
+|--------+---------------|
+| 108342 | {50,52,53,54} |
+:END:
+
+#+BEGIN_SRC sql
+select * from cleaned.facilities_universe where facility in (50, 52, 53, 54)
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+| facility |  company | comuna | region | original_address                         | address                      |
+|----------+----------+--------+--------+-----------------------------------------+------------------------------|
+|       50 | 10000742 |  10201 |     10 | dep. francisco gomez gonzalez 772 depto | dep francisco gomez gonzalez |
+|       52 | 10000742 |  10201 |     10 | francisco gomez gonzalez 772 depto      | francisco gomez gonzalez     |
+|       53 | 10000742 |  10201 |     10 | francisco gomez gonzlaez 772 depto      | francisco gomez gonzlaez     |
+|       54 | 10000742 |  10201 |     10 | francisco gomez gonzlez 772 depto       | francisco gomez gonzlez      |
+:END:
+
+
+
+#+BEGIN_SRC sql
+ select * from cleaned.facilities_matches where facilities_ids @>  ARRAY [51];
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+|  match | facilities_ids |
+|--------+---------------|
+| 197080 | {56,51,55}    |
+:END:
+
+#+BEGIN_SRC sql
+select * from cleaned.facilities_universe where facility in (51, 55, 56)
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+| facility |  company | comuna | region | original_address           | address         |
+|----------+----------+--------+--------+---------------------------+-----------------|
+|       51 | 10000742 |  10201 |     10 | francisco gomez 72 depto  | francisco gomez |
+|       55 | 10000742 |  10201 |     10 | francisco silva 958 depto | francisco silva |
+|       56 | 10000742 |  10201 |     10 | fransico silva 958 depto  | fransico silva  |
+:END:
+
+
+**** Semantic again
+
+#+BEGIN_SRC sql :async
+insert into semantic.facilities
+select
+    coalesce(match*-1, u.facility) as facility, -- Multiply by -1 the match id
+    company,
+    comuna,
+    region,
+    original_address as address,
+    address as cleaned_address,
+    u.facility
+from (
+    select
+        *
+    from
+        cleaned.facilities_universe
+        ) as u
+    left join (
+    select
+        match,
+        unnest(facilities_ids) as facility
+    from
+        cleaned.facilities_matches
+        ) as m
+    on m.facility = u.facility;
+#+END_SRC
+
+#+RESULTS:
+
+Let's add some indexes
+
+#+BEGIN_SRC sql :async
+create index facilities_facility_ix on semantic.facilities(facility);
+create index facilities_company_ix on semantic.facilities(company);
+create index facilities_company_facility_ix on semantic.facilities(company, facility);
+create index facilities_company_facility_comuna_ix on semantic.facilities(company, facility, comuna);
+#+END_SRC
+
+#+RESULTS:
+
+
+#+BEGIN_SRC sql :async
+select
+    facility < 0 as "facility < 0",
+    count(*)
+from
+    semantic.facilities
+group by cube(1);
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+| facility < 0 |   count |
+|--------------+---------|
+| f            |  657061 |
+| t            |  745845 |
+| ¤            | 1402906 |
+:END:
+
+
+#+BEGIN_SRC sql :async
+select
+    to_char(count(distinct facility), '999, 990')  as facilities,
+    to_char(count(distinct facility)*100.0/count(*), '99.0%') as "% of unique facilities"
+from semantic.facilities;
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+| facilities | % of unique facilities |
+|------------+------------------------|
+| 900, 483   |                  64.2% |
+:END:
+
+#+BEGIN_SRC sql :async
+select c.*, facilities from
+semantic.companies as c
+inner join (
+select
+    company,
+    count(*) as facilities
+from
+    semantic.facilities
+group by company
+order by count(*) desc
+limit 10) as f
+using (company)
+;
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+|  company | dv | name                                                    |  start_date | termination_date | termination_reason | tramo_ventas | economic_activity | economic_activity_description                                              | rubro | rubro_description                                                       | subrubro | subrubro_description                                                   | tipo_contribuyente          | subtipo_contribuyente          | legal_contact | legal_contact_dv | legal_contact_names         | address                                  | villa            | city     | comuna | region | origen | facilities |
+|----------+----+---------------------------------------------------------+------------+-----------------+-------------------+-------------+------------------+--------------------------------------------------------------------------+-------+------------------------------------------------------------------------+----------+-----------------------------------------------------------------------+----------------------------+-------------------------------+--------------+----------------+---------------------------+------------------------------------------+------------------+----------+--------+--------+--------+------------|
+| 76178360 |  2 | central de restaurantes aramark limitada                | 2004-11-03 | ¤               | ¤                 |          13 |           454000 | obras menores en construccion (contratistas, albaniles, carpinteros)     | g     | construccion                                                           |      451 | construccion                                                          | persona juridica comercial | soc. responsabilidad limitada | ¤            | ¤              | ¤                         | casino hospital los angeles avda. ricard | ¤                | santiago |  13107 |     13 | all    |       1661 |
+| 76178390 |  4 | central de restaurantes aramark multiservicios limitada | 2004-11-03 | ¤               | ¤                 |          13 |            14014 | destruccion de plagas, pulverizaciones, fumigaciones u otras             | a     | agricultura, ganaderia, caza y silvicultura                            |       14 | actividades de servicios agricolas y ganaderos                        | persona juridica comercial | soc. responsabilidad limitada | ¤            | ¤              | ¤                         | avenida la torre nº 98                   | ¤                | santiago |  13107 |     13 | all    |       1832 |
+| 80314700 |  0 | empresa de transportes rurales spa                      | 1993-01-01 | ¤               | ¤                 |          13 |           602130 | transporte interurbano de pasajeros via autobus                          | j     | transporte, almacenamiento y comunicaciones                            |      602 | otros tipos de transporte por via terrestre                           | persona juridica comercial | soc. responsabilidad limitada | ¤            | ¤              | ¤                         | dolores                                  | ex calle dolores | stgo     |  13106 |      ¤ | all    |       2460 |
+| 80571500 |  6 | iss servicios generales limitada                        | 1993-01-01 | ¤               | ¤                 |          13 |           291980 | reparacion otros tipos de maquinaria y equipos de uso general            | e     | industrias manufactureras metalicas                                    |      291 | fabricacion de maquinaria de uso general                              | persona juridica comercial | soc. responsabilidad limitada | ¤            | ¤              | ¤                         | av. las torres                           | ¤                | stgo     |  13107 |     13 | all    |       2033 |
+| 81537600 |  5 | rendic hermanos s a                                     | 1993-01-01 | ¤               | ¤                 |          13 |           154110 | fabricacion de pan, productos de panaderia y pasteleria                  | d     | industrias manufactureras no metalicas                                 |      154 | elaboracion de otros productos alimenticios                           | persona juridica comercial | sociedades anonimas cerradas  | ¤            | ¤              | ¤                         | urmeneta 574                             | pisos 7 al 11    | santiago |  13114 |     13 | all    |       2248 |
+| 89807200 |  2 | farmacias cruz verde s a                                | 1993-01-01 | ¤               | ¤                 |          13 |           512290 | venta al por mayor de huevos, leche, abarrotes, y otros alimentos n.c.p. | h     | comercio al por mayor y menor, rep. veh.automotores/enseres domesticos |      512 | venta al por mayor de materias primas agropecuarias                   | persona juridica comercial | sociedades anonimas cerradas  | ¤            | ¤              | ¤                         | avda. americo vespucio                   | ¤                | stgo     |  13107 |     13 | all    |       2039 |
+| 94623000 |  6 | sodexo chile s a                                        | 1993-01-01 | ¤               | ¤                 |          13 |           454000 | obras menores en construccion (contratistas, albaniles, carpinteros)     | g     | construccion                                                           |      451 | construccion                                                          | persona juridica comercial | sociedades anonimas cerradas  | 19936660     | 2              | raul adrian valdes castro | ¤                                        | ¤                | santiago |  13123 |     13 | all    |       2543 |
+| 96912870 |  5 | g4s security services regiones s.a                      | 2000-03-27 | ¤               | ¤                 |          13 |           749990 | otras actividades empresariales n.c.p.                                   | l     | actividades inmobiliarias, empresariales y de alquiler                 |      749 | act. empresariales y de profesionales prestadas a empresas n.c.p.     | persona juridica comercial | sociedades anonimas cerradas  | ¤            | ¤              | ¤                         | ¤                                        | ¤                | stgo     |  13120 |     13 | all    |       2248 |
+| 96937250 |  9 | eulen seguridad s a                                     | 2000-12-04 | ¤               | ¤                 |          13 |           742190 | otros servicios desarrollados por profesionales                          | l     | actividades inmobiliarias, empresariales y de alquiler                 |      742 | actividades de arquitectura e ingenieria y otras actividades tecnicas | persona juridica comercial | sociedades anonimas cerradas  | 7126883      | 7              | andrés moller cantín      | av. los leones 325                       | ¤                | santiago |  13123 |     13 | all    |       1799 |
+| 96937270 |  3 | eulen chile s a                                         | 2000-12-04 | ¤               | ¤                 |          13 |           453000 | acondicionamiento de edificios                                           | g     | construccion                                                           |      451 | construccion                                                          | persona juridica comercial | sociedades anonimas cerradas  | ¤            | ¤              | ¤                         | diego de almagro 507                     | ¤                | santiago |  13123 |     13 | all    |       1459 |
+:END:
+
+
+*** ✔ DONE Workers
+    CLOSED: [2018-11-21 Wed 17:54]
+
+  #+BEGIN_SRC sql :async :tangle sql/etl_dump_semantic.sql
+  set role direccion_trabajo_inspections_write;
+
+  drop table if exists semantic.workers;
+
+  create table semantic.workers as (
+      select distinct on (solrut::integer)
+          solrut::integer as worker,
+          lower(btrim(soldv))::varchar(1) as dv,
+          lower(btrim(solnombres)) as name,
+          lower(format('%s %s', btrim(solpaterno), btrim(solmaterno))) as last_name,
+          lower(btrim(solsexo))::varchar as sex,
+          case when is_valid_date(solfechanac::varchar) then solfechanac::date end as bod,
+          lower(btrim(solfuncion))::varchar as funcion,
+          solcodsalud::integer as codsalud,
+          solcodafp::integer as codafp,
+          btrim(solrsu)::varchar as rsu,
+          btrim(solnomorgsindical)::varchar as nomorgsindical,
+          btrim(lower(soldireccion)) as address,
+          btrim(solfono) as phone,
+          nullif(btrim(solcodcomuna),'')::integer as comuna,
+          codnacionalidad::smallint,
+          lower(btrim(nacionalidades.glosa)) as nacionalidad
+      from
+          cleaned.dt_fi_ingreso_fiscalizacion as ingreso
+          left join
+          raw.dt_fi_tiponacionalidades as nacionalidades on ingreso.codnacionalidad::smallint = nacionalidades.codigo::smallint
+      where solrut::integer is not null
+      order by solrut::integer, fechaorigen nulls last
+
+  );
+
+  comment on table semantic.workers is 'some inspections are triggered by a worker';
+  create index concurrently workers_worker_ix on semantic.workers(worker);
+  #+END_SRC
+
+  #+RESULTS:
+
+
+*** ✔ DONE Inspectors
+    CLOSED: [2018-11-21 Wed 17:54]
+
+ We received the file =Inspectors.xlsx= on *October 9, 2018*
+
+ #+BEGIN_SRC sql
+ set role direccion_trabajo_inspections_write;
+
+ drop table if exists raw.inspectors;
+
+ create table raw.inspectors (
+         "rut" varchar ,
+         "fecha nacimiento" date ,
+         "edad (años a la fecha)" smallint ,
+         "sexo" varchar ,
+         "región" varchar ,
+         "cod. dependencia" integer ,
+         "dependencia" varchar ,
+         "cod. departamento" integer,
+         "cod. unidad" integer ,
+         "unidad" varchar ,
+         "jefe directo" varchar ,
+         "fec.en el grado" date ,
+         "años ant. grado" integer ,
+         "area relacionada con la funcion principal" varchar,
+         "función principal" varchar ,
+         "profesión" varchar ,
+         "estudios" varchar ,
+         "profesional 8 semestres" varchar ,
+         "fec.ing. servicio acumulada" date ,
+         "años ant. servicio" integer ,
+         "fec.ing. adm.púb." date ,
+         "fec.en la planta (estamento)" date ,
+         "fec.en el grado (escalafón)" date ,
+         "fec.en el cargo (escalafón)" date ,
+         "fecha ingreso servicio (ultimo ingreso)" date ,
+         "estamento gt" varchar ,
+         "grado gt" integer ,
+         "calidad juridica ejece" varchar ,
+         "licencia medicas común enero 2017 a agosto 2018" integer ,
+         "lm totales" integer
+ );
+
+ #+END_SRC
+
+ #+RESULTS:
+ :RESULTS:
+ | DROP TABLE   |
+ | CREATE TABLE |
+ :END:
+
+
+ #+BEGIN_SRC sh :dir ./data
+ in2csv --no-inference Inspectors.xlsx | sed 1,2d | psql service=dt -c "set role direccion_trabajo_inspections_write; copy raw.inspectors from stdin  with csv header delimiter E',' NULL '' ENCODING 'utf-8'"
+ #+END_SRC
+
+ #+RESULTS:
+ #+BEGIN_SRC org
+ Expanded display is used automatically.
+ Null display is "¤".
+ Line style is unicode.
+ Unicode border line style is "single".
+ Unicode column line style is "single".
+ Unicode header line style is "double".
+ SET
+ Timing is on.
+ COPY 502
+ Time: 644.781 ms
+ #+END_SRC
+
+ Mmmm only 502 inspectors...
+
+ #+BEGIN_SRC sql :tangle sql/etl_dump_semantic.sql
+ set role direccion_trabajo_inspections_write;
+
+ drop table if exists semantic.inspectors;
+
+ create table semantic.inspectors as (
+     select
+         split_part("rut",'-',1)::integer as inspector,
+         split_part("rut",'-',2) as div,
+         "fecha nacimiento" as dob,
+         lower(substring(btrim("sexo") from 1 for 1)) as gender,
+         lower(btrim("región")) as region,
+         "cod. dependencia" as dt_office,
+         "cod. departamento" as department_code,
+         "cod. unidad" as working_unit_code,
+         lower(btrim("unidad")) as working_unit,
+         lower(btrim("jefe directo")) as supervisor,
+         "fec.en el grado" as last_promotion ,
+         lower(btrim("area relacionada con la funcion principal")) as work_description,
+         lower(btrim("función principal")) as function_description,
+         lower(btrim("profesión")) as major ,
+         lower(btrim("estudios"))  as title,
+         case when lower(btrim("profesional 8 semestres")) = 'si' then True else False end as university_studies,
+         "fec.ing. servicio acumulada" as start_date_service,
+         "fec.ing. adm.púb." as  start_date_public_administration,
+         "fec.en la planta (estamento)" as start_date_estamento,
+         "fec.en el grado (escalafón)" as start_date_grado,
+         "fec.en el cargo (escalafón)" as start_date_cargo ,
+         "fecha ingreso servicio (ultimo ingreso)" as last_starting_date ,
+         lower(btrim("estamento gt")) as estamento_gt,
+         "grado gt" as grado_gt ,
+         "calidad juridica ejece" as hire_status ,
+         "lm totales" as medical_licenses
+     from raw.inspectors
+
+ );
+ #+END_SRC
+
+ #+RESULTS:
+
+
+*** ✔ DONE Offices
+    CLOSED: [2018-11-21 Wed 17:54]
+
+ #+BEGIN_SRC sql :async :tangle sql/etl_dump_semantic.sql
+   set role direccion_trabajo_inspections_write;
+
+   drop table if exists semantic.dt_offices;
+
+   create table semantic.dt_offices as (
+
+       select
+       codeoffice::integer as dt_office,
+       lower(btrim(o.name)) as name,
+       lower(btrim(adress)) as address,
+       c.comuna as comuna,
+       o.region::smallint as region,
+       number_of_inspectors::smallint
+       from raw.office_data as o
+           left join
+           cleaned.comunas as c on unaccent(lower(btrim(o.comuna))) = unaccent(c.name)
+       where is_valid_integer(codeoffice) is true
+   );
+
+    comment on table semantic.dt_offices is 'DT offices';
+    create index concurrently dt_offices_dt_office_ix on semantic.dt_offices(dt_office);
+
+ #+END_SRC
+
+ #+RESULTS:
+
+
+*** REVIEW Inspections
+
+   #+BEGIN_SRC sql :tangle sql/etl_dump_semantic.sql :async
+   drop table if exists semantic.inspections;
+
+   create table semantic.inspections as (
+        select
+            idfiscalizacion::integer as inspection,
+            codestadofis::smallint as status,
+            nullif(lower(btrim(estado.glosa)), '') as status_description,
+
+            informe.funrutreg::integer as inspector,
+            inspectors.dob as inspector_dob,
+            inspectors.gender as inspector_gender,
+            inspectors.working_unit_code as inspector_working_unit,
+            inspectors.last_promotion as inspector_last_promotion,
+            inspectors.title as inspector_title,
+            inspectors.start_date_service as inspector_start_date_service,
+            inspectors.grado_gt as inspector_grado_gt,
+            inspectors.hire_status as inspector_hire_status,
+
+            (informe.funrutreg::integer = ingreso.funasignado::integer) as same_that_assigned_inspector,
+
+            companies.company as company,
+            companies.comuna as company_comuna,
+            companies.region as company_region,
+            companies.start_date as company_start_date,
+            companies.termination_date as company_termination_date,
+            companies.lifespan as company_life_span,
+            companies.tramo_ventas as company_tramo_ventas,
+            companies.economic_activity as company_economic_activity,
+            companies.rubro as company_rubro,
+            companies.tipo_contribuyente as company_tipo_contribuyente,
+            companies.legal_contact as company_legal_contact,
+
+            facilities.facility as facility,
+            facilities.comuna as facility_comuna,
+            facilities.region as facility_region,
+
+            informe.fechainiciovisita::date as inspection_start_date,
+            informe.fechaterminovisita::date as inspection_end_date,
+
+            ingreso.codorigenfis::smallint as tipo_origen,
+            nullif(lower(btrim(tipo_origen.glosa)),'') as tipo_origen_description,
+            ingreso.codunidadorigen::smallint as unidad_origen,
+            nullif(lower(btrim(unidad_origen.glosa)), '') as unidad_origen_description,
+            ingreso.codtiposol::smallint as solicitada_por,
+            nullif(lower(btrim(solicitada_por.glosa)), '')  as solicitada_por_description,
+
+            informe.codtipotermino::smallint as tipo_termino, -- DT: They recommend remove 12 (sin trámite), 13 (desisted), 14 (no located), 19 (check of fundamental rights) ,20 (subsumida en) ,21 (deleted by mistake) ,22 (derivad a mediacion)  and 23 (eliminada por error en el ingreso)
+            nullif(lower(btrim(tipo_termino.glosa)), '') as tipo_termino_description,
+            informe.egresoconmulta::boolean,
+
+            case when informe.codcae::smallint not in (0,1,-1)
+            then informe.codcae::smallint
+            end as inspected_cae,
+            nullif(lower(btrim(cae.glosa)),'') as inspected_cae_description,
+
+            informe.codtipoempresa::smallint as inspected_tipoempresa,
+
+            informe.emptrabhombres::integer as inspected_estimated_number_of_workers,
+            informe.insphombresinv::integer,
+            informe.inspmujeresinv::integer,
+            informe.inspmenohominv::integer,
+            informe.inspmenmujinv::integer,
+            informe.insphombresext::smallint,
+            informe.inspmujeresext::smallint,
+            informe.nrotrablugarfisc::integer,
+
+            nrocomision::integer,   -- !!!
+            case when is_valid_date(fechaorigen::varchar) then fechaorigen::date end as request_date,
+            ponderacion::real as difficulty,
+            nullif(btrim(kardex), 'NA')::varchar as kardex,
+
+            ingreso.codoficina::integer as dt_office,
+            dt_offices.address as dt_office_address,
+            dt_offices.comuna as dt_office_comuna,
+            dt_offices.region as dt_office_region,
+
+            -- Data from the requester
+            ingreso.solrut::integer as requester,
+            workers.sex as requester_sex,
+            workers.comuna as requester_comuna,
+            workers.codnacionalidad as requester_nacionalidad,
+            ingreso.emprut::integer as company_according_requester,
+            btrim(ingreso.empdv)::varchar(1) as dv_according_requester,
+            ingreso.empcodcomuna::integer as comuna_according_requester,
+            ingreso.emprae::integer as rae_according_requester,
+            nullif(btrim(lower(ingreso.empfono::varchar)), '') as phone_according_requester,
+            nullif(btrim(lower(ingreso.empemail::varchar)), '') as email_according_requester,
+            nullif(lower(btrim(ingreso.empacercam::varchar)), '') as references_according_requester,
+            codtipodoc::smallint as cod_tipo_doc,
+            nullif(lower(btrim(tipo_documento.glosa)),'') as tipo_doc,
+            btrim(iddocumento)::varchar as iddocumento,
+
+            urgencia::boolean,
+
+            nullif(lower(btrim(descdenuncia)),'')::text as denuncia_description,
+
+            ingreso.diavisita1::smallint,
+            to_char(to_timestamp(nullif(nullif(btrim(ingreso.horavisita1), ''), ':'), 'HH24:MI'), 'HH24:MI') as horavisita1,
+            ingreso.diavisita2::smallint,
+            to_char(to_timestamp(nullif(nullif(btrim(ingreso.horavisita2), ''), ':'), 'HH24:MI'), 'HH24:MI') as horavisita2,
+
+            ingreso.nrotrabempresa::integer as number_of_workers_according_requester,   -- estimated by the requester
+            ingreso.solesafectado::boolean,
+
+            btrim(ingreso.hayotros)::boolean as hay_otros,
+            nullif(ingreso.totalafectados, 9999)::smallint as total_afectados,  -- estimated by the requester
+
+            -- Data in the assignation
+            case when is_valid_date(fechaasignacion::varchar) then fechaasignacion::date end as assignment_date,
+            refiscalizacom::integer,
+            btrim(comespecial)::varchar as com_especial,
+            btrim(comordinaria)::varchar as com_ordinaria,
+            btrim(comextraord)::varchar as com_extraord,
+            mesasignacion::smallint, -- Some time is not the same that extract(year from fechaasignacion)
+            agnoasignacion::smallint,
+
+            diasjornada::smallint as dias_jornada,
+            btrim(horasjornadas)::smallint as horas_jornadas,
+
+            idconfigregional::integer,
+
+            ingreso.rutfunregistro::integer as request_registry_official,
+            case when is_valid_date(fecharegistro::varchar) then fecharegistro::date end as request_registry_date,
+            ingreso.ictfunregistro::integer,
+            ingreso.empcodtipoemptam::smallint as company_estimated_size, --
+
+            case when is_valid_date(informe.fechainforme::varchar) then fechainforme::date end as report_date,
+
+            -- Removing newlines (including the new unicode definitions)
+            regexp_replace(nullif(lower(btrim(informe.obsevinspeccion)), ''), E'[\n\r\f\u000B\u0085\u2028\u2029]+', ' ', 'g') as inspector_observations,
+
+            informe.oficiootrasinst::boolean,
+
+            nullif(lower(btrim(informe.institucionainformar)), '') as institucion_a_informar,
+
+            informe.periodorevdesde::date,
+            informe.periodorevhasta::date,
+            informe.codorgadmin16744::smallint,
+
+            informe.funrutreg::integer as report_registry_official,
+
+            informe.fechareg::date as report_registry_date,
+            informe.codinfdentroplazo::smallint,
+            informe.codtpoprocedimiento::smallint
+        from
+            (
+                cleaned.dt_fi_informefiscalizacion as informe
+                full outer join
+                cleaned.dt_fi_ingreso_fiscalizacion as ingreso using (idfiscalizacion)
+                )
+            left join
+            semantic.facilities as facilities on facilities.address = btrim(lower(informe.empdfdireccion)) and facilities.comuna = informe.empdfcodcomuna and facilities.company = informe.rutempresa
+            left join
+            semantic.companies as companies on companies.company = coalesce(informe.rutempresa, ingreso.emprut)
+            left join
+            raw.dt_fi_tipoorigenact as tipo_origen on tipo_origen.codigo = ingreso.codorigenfis
+            left join
+            raw.dt_fi_unidadorigen as unidad_origen on unidad_origen.codigo = ingreso.codunidadorigen
+            left join
+            raw.dt_fi_solicitadapor as solicitada_por on solicitada_por.codigo = ingreso.codtiposol
+            left join
+            raw.dt_fi_tipoterminofiscalizacion as tipo_termino on tipo_termino.codigo = informe.codtipotermino
+            left join
+            semantic.dt_offices as dt_offices on dt_offices.dt_office = ingreso.codoficina
+            left join
+            semantic.workers as workers on workers.worker = ingreso.solrut
+            left join
+            semantic.inspectors as inspectors on inspectors.inspector = ingreso.funasignado::integer
+            left join
+            raw.dt_fi_estadofiscalizacion as estado on ingreso.codestadofis = estado.codigo
+            left join
+            raw.cae as cae on informe.codcae::smallint = cae.codigo::smallint
+            left join
+            raw.dt_fi_tipo_documento as tipo_documento on tipo_documento.codigo = ingreso.codtipodoc
+    );
+
+    comment on table semantic.inspections is 'each row is an inspection that happened in a facility';
+
+    create index concurrently inspections_inspection_ix on semantic.inspections(inspection);
+    create index concurrently inspections_company_ix on semantic.inspections(company);
+    create index concurrently inspections_facility_ix on semantic.inspections(facility);
+    create index concurrently inspections_inspection_company_facility_ix on semantic.inspections(inspection, company, facility);
+    create index concurrently inspections_inspection_start_date_ix on semantic.inspections(inspection_start_date);
+    create index concurrently inspections_inspection_end_date_ix on semantic.inspections(inspection_end_date);
+    -- create index concurrently inspections_inspection_date_range_ix on semantic.inspections using gist (daterange(inspection_start_date, inspection_end_date, '[]'));
+    create index concurrently inspections_inspector_ix on semantic.inspections(inspector);
+    create index concurrently inspections_requester_ix on semantic.inspections(requester);
+    create index concurrently inspections_status_ix on semantic.inspections(status);
+    create index concurrently inspections_tipo_termino_ix on semantic.inspections(tipo_termino);
+    create index concurrently inspections_solicita_por_ix on semantic.inspections(solicitada_por);
+    create index concurrently inspections_unidad_origen_ix on semantic.inspections(unidad_origen);
+    create index concurrently inspections_tipo_origen_ix on semantic.inspections(tipo_origen);
+    create index concurrently inspections_urgencia_ix on semantic.inspections(urgencia);
+   #+END_SRC
+
+   #+RESULTS:
+
+   #+BEGIN_SRC sql :async
+      set role direccion_trabajo_inspections_write;
+
+      drop table if exists semantic.inspections_transformed;
+
+      create table semantic.inspections_transformed as (
+          select
+              inspection,
+              company,
+              facility,
+
+              case when solicitada_por in (1,2,3,4, 5,6,7,8,13) then 0 -- reactive
+                  else 1  --proactive
+              end as proactive_inspection,
+
+              case when tipo_termino in (8,10,11,16,18) then 1
+              when tipo_termino in (9,15,17) then 0
+              end as penalized,
+
+              inspection_start_date,
+              inspection_start_date - lag(inspection_start_date) over(partition by company order by inspection_start_date asc) as "time_since_previous_c",
+              inspection_start_date - lag(inspection_start_date) over(partition by facility order by inspection_start_date asc) as "time_since_previous_f",
+
+              to_char(inspection_start_date, 'ID') as "dow_inspection",
+              to_char(inspection_start_date, 'DD') as "dom_inspection",
+              to_char(inspection_start_date, 'DDD') as "doy_inspection",
+              to_char(inspection_start_date, 'MM') as "month_inspection",
+              to_char(inspection_start_date, 'W') as "week_inspection",
+              to_char(inspection_start_date, 'WW') as "woy_inspection",
+              to_char(inspection_start_date, 'Q') as "q_inspection",
+
+              sin((to_char(inspection_start_date, 'MM')::int - 1)*(2*pi()/12.0)) as "month_y_inspection",
+              cos((to_char(inspection_start_date, 'MM')::int - 1)*(2*pi()/12.0)) as "month_x_inspection",
+              sin((to_char(inspection_start_date, 'D')::int - 1)*(2*pi()/7.0)) as "day_y_inspection",
+              cos((to_char(inspection_start_date, 'D')::int - 1)*(2*pi()/7.0)) as "day_x_inspection"
+          from semantic.inspections
+              );
+
+          comment on table semantic.inspections is 'Extracts some useful transformations from inspections';
+
+      create index concurrently inspections_transformed_inspection_ix on semantic.inspections_transformed(inspection);
+      create index concurrently inspections_transformed_company_ix on semantic.inspections_transformed(company);
+      create index concurrently inspections_transformed_facility_ix on semantic.inspections_transformed(facility);
+      create index concurrently inspections_transformed_inspection_company_facility_ix on semantic.inspections_transformed(inspection, company, facility);
+      create index concurrently inspections_transformed_inspection_start_date_ix on semantic.inspections_transformed(inspection_start_date);
+
+   #+END_SRC
+
+   #+RESULTS:
+
+
+*** REVIEW Materias
+    :PROPERTIES:
+    :ATTACH_DIR: /home/nanounanue/projects/dsapp/chile_dt/triage/images
+    :END:
+
+ Each inspection has a series of /materias/ to be inspected.
+ The definition and type of /materias/ had been changed over time.
+ Their definition, type and quantity has been reformed in a major form
+ three times:
+
+ #+CAPTION: Image taken from [[file:documentation/Materias_universos.pptx][Materias_universos.pptx]]
+ [[file:images/screenshot-20181023-104205.png]]
+
+ /Dirección del trabajo/ created a set of rules/instructions for unifying these three
+ groups in one [[file:documentation/FuncionExtaccionMaterias.docx][data cube]].
+
+ We recreated those instructions in the table =semantic.materias:=
+
+   #+BEGIN_SRC sql :async
+   set role direccion_trabajo_inspections_write;
+
+   drop table if exists semantic.materias;
+
+   create table semantic.materias as (
+       with
+       -- We need to remove duplicates from raw.dt_mul_categnorma
+       -- Following instructions from "FuncionExtaccionMaterias.docx" (sic)
+       mul_categnorma_hist as (
+           (select distinct on (idnormasan)
+               codcategoria, coddetcategoria, idnormasan, ponderacion, excluyente, urgente, vigente
+           from raw.dt_mul_categnorma
+           where idnormasan not in (4261, 4293, 4642,4949)
+               )
+       union
+           (select
+               ,*
+           from raw.dt_mul_categnorma
+           where idnormasan in (4261, 4293, 4642, 4949) and vigente is true
+               )
+           ),
+
+       categ_norma as (
+       -- If codmateria is in 775, 776, 777, 778 and 779
+       select
+           'grupo4' as origen,
+           materias.codigo::integer as materia,
+           materias.excluye::integer::boolean as excluyente,
+           materias.urgente::integer::boolean,
+           materias.valor::real as estimated_difficulty,
+           lower(btrim(materia)) as materia_description,
+           tipos.codigo::integer as categoria_materia,
+           lower(btrim(tipos.glosa)) as categoria_materia_description
+       from raw.dt_fi_detallemateria as materias
+           inner join  raw.dt_mul_categnorma as categorias on materias.codigo = categorias.idnormasan
+           inner join raw.dt_mul_tipocategorias as tipos on categorias.codcategoria = tipos.codigo
+       where materias.codigo in (775,776,777,778,779)
+           ),
+       -- If codmateria is < 1000 and is not in 775, 776, 777, 778 and 779
+       detalle_materia as (
+       select
+           'materias' as origen,
+           materias.codigo::integer as materia,
+           excluye::integer::boolean as excluyente,
+           urgente::integer::boolean,
+           valor::real as estimated_difficulty,
+           lower(btrim(materia)) as materia_description,
+           tipos.codigo::integer as categoria_materia,
+           lower(btrim(tipos.glosa)) as categoria_materia_description
+       from raw.dt_fi_detallemateria as materias
+           inner join raw.dt_fi_tipomateria as tipos on materias.codtipomat = tipos.codigo
+       where materias.codigo not in (775,776,777,778,779) and materias.codigo < 1000
+           ),
+
+       -- If codmateria is >= 1000 and <= 10000 or 0
+       detalle_norma_san as (
+       select
+           'tipificador' as origen,
+           materias.normasan::integer as materia,
+           NULL::boolean as excluyente,
+           NULL::boolean as urgente,
+           NULL::real as estimated_difficulty,
+           lower(btrim(enunciado)) as materia_description, -- Should I use "hecho"?
+           tipos.codigo::integer as categoria_materia,
+           lower(btrim(tipos.glosa)) as categoria_materia_description
+       from raw.dt_mul_detallenormasan as materias
+           inner join mul_categnorma_hist as categorias on categorias.idnormasan = materias.normasan   -- In the document this is
+           inner join raw.dt_mul_tipocategorias as tipos on tipos.codigo = categorias.codcategoria
+       where (materias.normasan::integer between 1000 and 10000) or materias.normasan::integer = 0
+           ),
+
+       -- If codmateria is > 10000
+       detalle_materia_turno as (
+       select
+           'turno' as origen,
+           materias.codigo::integer as materia,
+           excluyente::integer::boolean,
+           urgente::integer::boolean,
+           ponderacion::real as estimated_difficulty,
+           atencionpublico::integer::boolean,
+           unidadfiscalizacion::integer::boolean,
+           lower(btrim(materia)) as materia_description,
+           categorias.codigo::integer as categoria_materia,
+           lower(btrim(categorias.glosa)) as categoria_materia_description
+       from raw.dt_fi_detallemateriaturno as materias
+           inner join raw.dt_mul_tipocategoriasturno as categorias on materias.codcategoriamat = categorias.codigo
+       where materias.codigo::integer > 10000
+           ),
+
+       glosa_estatus_materia as (
+       select
+           "Codigo"::smallint as codigo,
+           lower(btrim("Glosa")) as description,
+           lower(btrim("GlosaF14")) as description_f14
+       from raw.dt_fi_infofiscdetectainfr
+           )
+
+      select
+          coalesce(materia.idfiscalizacion, informe.idfiscalizacion) as inspection,
+          inspections.inspection_start_date,
+          inspections.company,
+          inspections.facility,
+          coalesce(materia.codmateria::smallint, informe.codmateria::smallint)  as materia, -- sometimes they can add more materias
+          coalesce(categ_norma.materia_description, detalle_materia.materia_description, detalle_norma_san.materia_description, detalle_materia_turno.materia_description) as materia_description,
+          coalesce(categ_norma.categoria_materia, detalle_materia.categoria_materia, detalle_norma_san.categoria_materia, detalle_materia_turno.categoria_materia) as categoria_materia,
+          coalesce(categ_norma.categoria_materia_description, detalle_materia.categoria_materia_description, detalle_norma_san.categoria_materia_description, detalle_materia_turno.categoria_materia_description) as categoria_materia_description,
+          materia.codorigen::smallint as cod_origen,
+          informe.proced::smallint as proced,
+          informe.coddetecinfrac::smallint as initial_status,
+          glosa_estatus_materia.description as initial_status_description,
+          informe.codsituacionfinal::smallint as final_status,
+          informe.codaccion::smallint as action_code,
+          nullif(lower(btrim(informe.informe)), '') as inpector_observations,
+          coalesce(categ_norma.origen::text, detalle_materia.origen::text, detalle_norma_san.origen::text, detalle_materia_turno.origen::text)::text as origen
+      from raw.dt_fi_materiafiscalizar as materia
+          full outer  join raw.dt_fi_informemateriafisc as informe using (idfiscalizacion, codmateria)
+          left join semantic.inspections as inspections on inspections.inspection = coalesce(informe.idfiscalizacion, materia.idfiscalizacion)
+          left join categ_norma           on categ_norma.materia = materia.codmateria           -- If codmateria is in 775, 776, 777, 778 and 779
+          left join detalle_materia       on detalle_materia.materia = materia.codmateria       -- If codmateria is < 1000 and is not in 775, 776, 777, 778 and 779
+          left join detalle_norma_san     on detalle_norma_san.materia = materia.codmateria     -- If codmateria is >= 1000 and <= 10000
+          left join detalle_materia_turno on detalle_materia_turno.materia = materia.codmateria -- If codmateria is > 10000
+          left join glosa_estatus_materia on glosa_estatus_materia.codigo = informe.coddetecinfrac::smallint
+      where company is not null
+   );
+
+   create index concurrently materias_inspection_ix on semantic.materias(inspection);
+   create index concurrently materias_materia_ix on semantic.materias(materia);
+   create index concurrently materias_facility_ix on semantic.materias(facility);
+   create index concurrently materias_company_ix on semantic.materias(company);
+   create index concurrently materias_inspection_company_ix on semantic.materias(inspection, company);
+   create index concurrently materias_inspection_facility_ix on semantic.materias(inspection, facility);
+   create index concurrently materias_inspection_company_facility_ix on semantic.materias(inspection, company, facility);
+   create index concurrently materias_inspection_materia_ix on semantic.materias(inspection, materia);
+   create index concurrently materias_initial_status_ix on semantic.materias(initial_status);
+   create index concurrently materias_final_status_ix on semantic.materias(final_status);
+   #+END_SRC
+
+   #+RESULTS:
+
+
+*** REVIEW Semantic schema: final structure
+
+ #+CAPTION: =semantics= schema ERD
+ #+ATTR_HTML: :align center :width 100px
+ #+ATTR_LATEX: :align center :width 100px
+ #+ATTR_ORG :align center :width 100px
+ [[./images/semantics_ERD.png]]
+
+
+
+    #+BEGIN_SRC sql
+    \dt+ semantic.
+    #+END_SRC
+
+    #+RESULTS:
+    :RESULTS:
+    | List of relations |            |       |                                  |         |                                                       |
+    |-------------------+------------+-------+----------------------------------+---------+-------------------------------------------------------|
+    | Schema            | Name       | Type  | Owner                            | Size    | Description                                           |
+    | semantic          | companies  | table | direccion_trabajo_inspections_write | 1541 MB |                                                       |
+    | semantic          | dt_offices  | table | direccion_trabajo_inspections_write | 16 kB   | DT offices                                            |
+    | semantic          | events     | table | direccion_trabajo_inspections_write | 1497 MB | each row is an inspection that happened in a facility |
+    | semantic          | facilities | table | direccion_trabajo_inspections_write | 242 MB  |                                                       |
+    | semantic          | inspectors | table | direccion_trabajo_inspections_write | 152 kB  |                                                       |
+    | semantic          | materias   | table | direccion_trabajo_inspections_owner | 1842 MB |                                                       |
+    | semantic          | workers    | table | direccion_trabajo_inspections_write | 257 MB  | some inspections are triggered by a worker            |
+    :END:
+
+
+* Some EDA
+
+#+BEGIN_SRC ipython :exports none
+%matplotlib inline
+import numpy as np
+import pandas as pd
+import matplotlib
+from matplotlib import pyplot as plt
+
+
+import json
+s = json.load(open("styles/bmh_matplotlibrc.json"))
+matplotlib.rcParams.update(s)
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+# Out[3]:
+:END:
+
+#+BEGIN_SRC ipython
+import sqlalchemy
+
+engine = sqlalchemy.create_engine('postgresql://@/?service=dt')
+
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+# Out[2]:
+:END:
+
+#+BEGIN_SRC ipython :ipyfile ./plots/inspections_over_time.png :results silent
+
+df = pd.read_sql("""
+select
+date_trunc('month', inspection_start_date) as month,
+count(*) as cnt
+from semantic.inspections
+where inspection_start_date > '2000-01-01'  group by 1 order by 1 asc
+""",
+engine)
+
+plt.figure(figsize=(12.5, 3.5))
+
+n_months = len(df.cnt)
+plt.bar(np.arange(n_months), df.cnt, color="#348ABD")
+plt.xlabel("Time (months)")
+plt.ylabel("count of inspections")
+plt.title("Number of inspections over time")
+plt.xlim(0, n_months);
+#+END_SRC
+
+[[./plots/inspections_over_time.png]]
+
+#+BEGIN_SRC ipython :ipyfile ./plots/facilities_inspected_over_time.png :results silent
+df = pd.read_sql("""
+select
+date_trunc('month', inspection_start_date) as month,
+count(distinct facility) as cnt
+from semantic.inspections
+where inspection_start_date > '2000-01-01' group by 1 order by 1 asc
+""",
+engine)
+
+plt.figure(figsize=(12.5, 3.5))
+
+n_months = len(df.cnt)
+plt.bar(np.arange(n_months), df.cnt, color="#348ABD")
+plt.xlabel("Time (months)")
+plt.ylabel("count of facilities inspected")
+plt.title("Facilities inspected over time")
+plt.xlim(0, n_months);
+#+END_SRC
+
+[[./plots/facilities_inspected_over_time.png]]
+
+#+BEGIN_SRC ipython :ipyfile ./plots/companies_inspected_over_time.png :results silent
+df = pd.read_sql("""
+select
+date_trunc('month', inspection_start_date) as month,
+count(distinct company) as cnt
+from semantic.inspections
+where inspection_start_date > '2000-01-01'
+group by 1 order by 1 asc
+""",
+engine)
+
+plt.figure(figsize=(12.5, 3.5))
+
+n_months = len(df.cnt)
+plt.bar(np.arange(n_months), df.cnt, color="#348ABD")
+plt.xlabel("Time (months)")
+plt.ylabel("count of companies inspected")
+plt.title("Companies inspected over time")
+plt.xlim(0, n_months);
+#+END_SRC
+
+[[./plots/companies_inspected_over_time.png]]
+
+ #+NAME: inspections_status
+ #+BEGIN_SRC sql
+ set role direccion_trabajo_inspections_write;
+
+ select
+     status, status_description,  count(*)
+ from semantic.inspections
+ where daterange('2003-01-01', '2019-01-01') @> inspection_start_date
+ group by status, status_description
+ order by status_description nulls last
+ #+END_SRC
+
+ #+RESULTS: inspections_status
+ :RESULTS:
+ | status | status_description                        |   count |
+ |--------+------------------------------------------+---------|
+ |      2 | asignada                                 |       4 |
+ |      8 | de baja (eliminada por error de ingreso) |     442 |
+ |      6 | derecho fundamental desistido            |       9 |
+ |     12 | derivada a mediacion                     |       3 |
+ |      5 | eliminada                                |      10 |
+ |      3 | informada                                |    9751 |
+ |      1 | ingresada                                |       2 |
+ |     14 | ingreso nomina menores pendiente         |       1 |
+ |     13 | lista de chequeo pendiente               |       1 |
+ |      9 | multa  pendiente                         |      54 |
+ |     11 | revisada/rechazada                       |     756 |
+ |     10 | revisada/visada                          | 1377559 |
+ |      ¤ | ¤                                        |  190989 |
+ :END:
+
+
+
+ #+NAME: requester_type
+ #+BEGIN_SRC sql
+ set role direccion_trabajo_inspections_write;
+
+ select
+     solicitada_por, solicitada_por_description,  count(*)
+ from semantic.inspections
+ where daterange('2003-01-01', '2019-01-01') @> inspection_start_date
+ group by 1,2
+ order by 1 nulls last
+ #+END_SRC
+
+ #+RESULTS: requester_type
+ :RESULTS:
+ | solicitada_por | solicitada_por_description |  count |
+ |---------------+--------------------------+--------|
+ |             0 | por programa             | 341346 |
+ |             1 | trabajadores             | 469486 |
+ |             2 | organizacion sindical    |  74682 |
+ |             3 | empleador                | 176191 |
+ |             4 | no se identifica         |  98257 |
+ |             5 | institucion previsional  |  76753 |
+ |             6 | otra institucion         |   6421 |
+ |             7 | autoridad                |   5630 |
+ |             8 | tercero                  |  16680 |
+ |             9 | inspeccion               |  46950 |
+ |            10 | direccion regional       |  24207 |
+ |            11 | direccion nacional       |  18095 |
+ |            12 | fiscalizador             |  32313 |
+ |            13 | tribunal                 |   1393 |
+ |             ¤ | ¤                        | 191177 |
+ :END:
+
+ #+NAME: tipo_termino
+ #+BEGIN_SRC sql
+ set role direccion_trabajo_inspections_write;
+
+ select
+     tipo_termino, tipo_termino_description,  count(*)
+ from semantic.inspections
+ where daterange('2003-01-01', '2019-01-01') @> inspection_start_date
+ group by 1,2
+ order by 1 nulls last
+ #+END_SRC
+
+ #+RESULTS: tipo_termino
+ :RESULTS:
+ | tipo_termino | tipo_termino_description                   |  count |
+ |-------------+------------------------------------------+--------|
+ |           0 | ¤                                        |      2 |
+ |           1 | revision completa sin infracción         | 115602 |
+ |           2 | empleador no ubicado                     |   8191 |
+ |           3 | desistimiento (c88. derecho colectivo)   |    787 |
+ |           4 | informe por fiscalizacion extraordinaria |   6858 |
+ |           5 | certificado 0,25                         | 139514 |
+ |           6 | certificado inicio/termino               |  10068 |
+ |           7 | beneficio                                |  13987 |
+ |           8 | revisión completa con infracción         |    349 |
+ |           9 | sin multa                                | 767334 |
+ |          10 | con multa                                | 384223 |
+ |          11 | sin revisión con multa                   |   1819 |
+ |          12 | sin trámite                              |    408 |
+ |          13 | desistido                                |   2712 |
+ |          14 | no ubicado                               |  42441 |
+ |          15 | beneficio sin multa                      |  64278 |
+ |          16 | beneficio con multa                      |   1286 |
+ |          17 | certificado sin multa                    |     44 |
+ |          18 | certificado con multa                    |     21 |
+ |          19 | revisión derecho fundamental             |   8108 |
+ |          20 | subsumida en                             |   4497 |
+ |          21 | eliminada por error                      |   6779 |
+ |          23 | eliminado por error de ingreso           |    273 |
+ :END:
+
+
+
+* Labels
+
+The main objective of this project is to identify the most violations
+given DT’s limited resources. We would like to
+identify the probability of a violation given a facility’s inspection
+status, $P(V|I)$. Notably, we need to know the inspection status of the
+facility to correctly identify this effect. We must
+estimate the probability of the facilities being inspected,
+i.e. $P(I)$.
+
+An additional problem with the data is that we have /precise/ information about the
+all the /companies/, not about *all* the /facilities/ (but we tried to
+alleviate that, see [[sec:facilities_record_linkage][here]])
+
+** P(Violation|Inspection)
+
+ We can define several labels:
+
+*** /Facility / Company/ -> penalized
+
+ #+NAME: inspections_tipo_termino
+ #+BEGIN_SRC sql
+ set role direccion_trabajo_inspections_write;
+
+ select
+     tipo_termino, tipo_termino_description,  count(*)
+ from semantic.inspections
+ where daterange('2003-01-01', '2019-01-01') @> inspection_start_date
+ group by tipo_termino, tipo_termino_description
+ order by tipo_termino nulls last
+ #+END_SRC
+
+ #+RESULTS: inspections_tipo_termino
+ :RESULTS:
+ | tipo_termino | tipo_termino_description                   |  count |
+ |-------------+------------------------------------------+--------|
+ |           0 | ¤                                        |      2 |
+ |           1 | revision completa sin infracción         | 115602 |
+ |           2 | empleador no ubicado                     |   8191 |
+ |           3 | desistimiento (c88. derecho colectivo)   |    787 |
+ |           4 | informe por fiscalizacion extraordinaria |   6858 |
+ |           5 | certificado 0,25                         | 139514 |
+ |           6 | certificado inicio/termino               |  10068 |
+ |           7 | beneficio                                |  13987 |
+ |           8 | revisión completa con infracción         |    349 |
+ |           9 | sin multa                                | 767334 |
+ |          10 | con multa                                | 384223 |
+ |          11 | sin revisión con multa                   |   1819 |
+ |          12 | sin trámite                              |    408 |
+ |          13 | desistido                                |   2712 |
+ |          14 | no ubicado                               |  42441 |
+ |          15 | beneficio sin multa                      |  64278 |
+ |          16 | beneficio con multa                      |   1286 |
+ |          17 | certificado sin multa                    |     44 |
+ |          18 | certificado con multa                    |     21 |
+ |          19 | revisión derecho fundamental             |   8108 |
+ |          20 | subsumida en                             |   4497 |
+ |          21 | eliminada por error                      |   6779 |
+ |          23 | eliminado por error de ingreso           |    273 |
+ :END:
+
+
+We define that the /outcome/ of the inspection as /fined/ or /penalized/ if
+=tipo_termino= = { 8, =10, 11, 16, 18}=
+
+And _without_ _penalization_, if =tipo_termino = { 9, 15, 17}=.
+
+#+BEGIN_SRC ipython :ipyfile ./plots/companies_fined_over_time.png :results silent
+df = pd.read_sql(
+    """
+    select
+    date_trunc('month', inspection_start_date) as month,
+    count(distinct company) as cnt
+    from semantic.inspections
+    where
+    inspection_start_date > '2000-01-01'
+    and tipo_termino in (8,10,11,16,18)  -- penalized
+    group by 1 order by 1 asc
+    """,
+    engine)
+
+plt.figure(figsize=(12.5, 3.5))
+
+n_months = len(df.cnt)
+plt.bar(np.arange(n_months), df.cnt, color="#348ABD")
+plt.xlabel("Time (months)")
+plt.ylabel("count of companies penalized")
+plt.title("Companies penalized over time")
+plt.xlim(0, n_months);
+#+END_SRC
+
+[[./plots/companies_fined_over_time.png]]
+
+
+*** /Facility / Company/ -> found violation
+
+#+NAME: materias_initial_status
+#+BEGIN_SRC sql
+set role direccion_trabajo_inspections_write;
+
+select
+    initial_status,
+    initial_status_description,
+    count(*)
+from semantic.materias
+group by initial_status, initial_status_description
+order by initial_status nulls last
+
+#+END_SRC
+
+#+RESULTS: materias_initial_status
+:RESULTS:
+| initial_status | initial_status_description            |   count |
+|---------------+-------------------------------------+---------|
+|            -1 | ¤                                   |  121116 |
+|             0 | no detecta infracción               | 3561057 |
+|             1 | detecta infracción sin cursar multa |  446475 |
+|             2 | detecta infracción cursa multa      |  559890 |
+|             3 | constata sin corregir               |    3966 |
+|             4 | constata corregido                  |    3717 |
+|             5 | no se informa (df)                  |   33521 |
+|             6 | materia no corresponde              |  118656 |
+|             7 | investigación                       |   45878 |
+|             ¤ | ¤                                   | 2173246 |
+:END:
+
+If we are interested in /facilities that violate some materia/, while
+they were inspected (i.e. the /outcome/ of the inspection)  we should focus on
+the inspections that have at least one /materia/ with an initial status of =1= or =2=.
+
+#+BEGIN_SRC ipython :ipyfile ./plots/companies_with_violations_found_over_time.png :results silent
+df = pd.read_sql(
+    """
+    select
+    date_trunc('month', inspection_start_date) as month,
+    count(distinct company) as cnt
+    from semantic.materias
+    where
+    inspection_start_date > '2000-01-01'
+    and
+    initial_status in (1,2)
+    and company is not null
+    group by 1 order by 1 asc
+    """,
+    engine)
+
+plt.figure(figsize=(12.5, 3.5))
+
+n_months = len(df.cnt)
+plt.bar(np.arange(n_months), df.cnt, color="#348ABD")
+#plt.bar(df['month'], df.cnt, color="#348ABD")
+plt.xlabel("Time (months)")
+plt.ylabel("count of companies")
+plt.title("Companies with infractions over time")
+plt.xlim(0, n_months);
+#+END_SRC
+
+[[./plots/companies_with_violations_found_over_time.png]]
+
+*NOTE*: There is another field, =final_status=, but to this date (2018-11-29) we
+don't know the meaning of it.
+
+#+NAME: materias_final_status
+#+BEGIN_SRC sql
+set role direccion_trabajo_inspections_write;
+
+select
+    final_status,
+    count(*)
+from semantic.materias
+group by final_status
+order by final_status nulls last
+#+END_SRC
+
+#+RESULTS: materias_final_status
+:RESULTS:
+| final_status |   count |
+|-------------+---------|
+|           0 |  332732 |
+|           1 |  109464 |
+|           ¤ | 6625326 |
+:END:
+
+
+** P(Inspection)
+
+As a first approximation we will calculate the probability of being
+inspected at the company level
+
+#+BEGIN_SRC sql :async
+select
+    extract(year from t.year) as year,
+    t.inspected,
+    t.cnt
+from
+    (select generate_series('2000-01-01'::date, '2019-01-01'::date, interval '1y') as year) as years
+    cross join lateral (
+    select
+        years.year as year,
+        coalesce(inspected, 'no inspected') as inspected,
+        count(*) as cnt
+    from
+        semantic.companies as c
+        left join (
+        select company, 'inpected'::text as inspected
+        from semantic.inspections as i
+        where
+            extract(year from inspection_start_date) = extract(year from years.year)
+            ) as i
+        using(company)
+    where
+        c.lifespan @> years.year::date
+    group by 1,2
+        ) as t \crosstabview
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+| year | inpected | no inspected |
+|------+----------+--------------|
+| 2000 |       48 |       788517 |
+| 2001 |    18547 |       789712 |
+| 2002 |    60842 |       790669 |
+| 2003 |   115004 |       796419 |
+| 2004 |   100161 |       809319 |
+| 2005 |   118103 |       824743 |
+| 2006 |   102111 |       843056 |
+| 2007 |    98680 |       864683 |
+| 2008 |    87755 |       891557 |
+| 2009 |    90684 |       914233 |
+| 2010 |    90166 |       940983 |
+| 2011 |    93298 |       970093 |
+| 2012 |    94769 |      1008343 |
+| 2013 |    92410 |      1052292 |
+| 2014 |    99626 |      1099262 |
+| 2015 |   108331 |      1159686 |
+| 2016 |   105454 |      1221742 |
+| 2017 |    96397 |      1323876 |
+| 2018 |    48214 |      1361459 |
+| 2019 |          |      1383881 |
+:END:
+
+
+* Triage
+
+** Support functions
+
+The =nuke_triage()= function helps us to nuke triage related
+tables/schemas (for example if
+you are testing or your experiment went horribly wrong)
+
+#+BEGIN_SRC sql
+
+create or replace function nuke_triage()
+    returns text as $result$
+
+    declare
+    result text;
+    query text;
+
+    begin
+
+    execute 'drop schema if exists model_metadata cascade';
+    raise notice 'model_metadata deleted';
+    execute 'drop schema if exists features cascade';
+    raise notice 'features deleted';
+    execute 'drop schema if exists train_results cascade';
+    raise notice 'train_results deleted';
+    execute 'drop schema if exists test_results cascade';
+    raise notice 'test_results deleted';
+
+    execute 'drop table if exists results_schema_versions';
+    raise notice 'results_schema_versions deleted';
+
+
+select into query
+    string_agg(
+        format('drop table %I cascade;', tablename), E'\n'
+        )
+from   pg_tables
+where  tablename ~ 'cohort_|labels_';
+
+
+
+    if query is not null then
+    raise notice '%', query;
+    execute query;
+    else
+    raise notice 'no  labels or states tables from triage found';
+    end if;
+
+    return 'triage was send to the oblivion. Long live to triage!';
+    end;
+    $result$ language plpgsql;
+
+
+#+END_SRC
+
+#+RESULTS:
+
+
+
+** Running locally
+
+You need the following files:
+
+*** =.env=
+Copy the file [[file:config/env.example][config/env.example]] to =config/.env= and fill all the
+missing information
+
+#+BEGIN_SRC shell :tangle config/env.example
+# ENVIRONMENT
+ENV=development
+PROJECT_NAME=chile-dt
+PROJECT_VERSION=0.2  # Docker image version
+
+# POSTGRESQL
+POSTGRES_PASSWORD=
+POSTGRES_USER=
+POSTGRES_DB=
+POSTGRES_PORT=
+POSTGRES_HOST=
+POSTGRES_ROLE=
+
+# AWS ECR
+AWS_REGISTRY=dssapp registry (you should ask for this or create your own)
+
+# AWS JOB QUEUE
+AWS_JOB_QUEUE=name of the batch queue
+
+# AWS S3
+S3_BUCKET=dsapp bucket (This is only the "root" folder)
+
+AWS_DEFAULT_REGION=us-west-2
+
+## TRIAGE (this number should be compatible with run_experiment task definition)
+NUMBER_OF_PROCESSES=60
+NUMBER_OF_DB_PROCESSES=10
+#+END_SRC
+
+Then, in the folder above =config= run the following in order to
+activate the environment variables:
+
+#+BEGIN_SRC sh
+export $(cat conf/.env | grep -v ^# | xargs)
+#+END_SRC
+
+You could verify that it worked running:
+
+#+BEGIN_SRC sh
+env | grep AWS
+#+END_SRC
+
+*** Dockerfile
+
+The [[file:infrastructure/Dockerfile][Dockerfile]] probably wont need to be changed, but feel free to do
+so. The basic assumption is that you have a =run.py= file that executes
+=triage=, an example of this file is provided in the next section.
+
+#+BEGIN_SRC dockerfile :tangle infrastructure/Dockerfile
+FROM python:3.6.7-slim-jessie
+
+RUN apt-get update && \
+    apt-get install -y git
+
+RUN mkdir /code
+
+COPY requirements.txt /code
+
+RUN mkdir /triage
+
+RUN pip install -r /code/requirements.txt
+
+COPY run.py /code
+
+ENTRYPOINT [ "python" , "/code/run.py" ]
+#+END_SRC
+
+*** [[file:infrastructure/run.py][run.py]], [[file:infrastructure/requirements.txt][requirements.txt]]
+
+This two files are needed for running =triage= inside the docker container.
+
+
+** Running on AWS Batch
+
+For bigger experiments we decided to use =AWS Batch=
+
+AWS Batch requires setup the following infrastructure:
+
+    - An AWS S3 bucket for storing the original data and the successive transformations of it made by the pipeline.
+    - A PostgreSQL database (provided by AWS RDS) for storing the data in a relational form.
+    - An Elastic Container Registry (AWS ECR) for storing the triage's Docker image used in the pipeline.
+    - AWS Batch Job Queue configured and ready to go.
+
+*** Assumptions
+
+    - You have IAM credentials with permissions to run AWS Batch, read
+      AWS S3 and create AWS EC2 machines.
+    - You installed =awscli= and configure your credentials following
+      the standard instructions.
+    - You have access to a S3 bucket with the following form
+      =s3://dssg-${PROJECT_NAME}=
+    - You have a AWS ECR repository with the following form: =dsapp/${PROJECT_NAME}/triage=
+    - You have a AWS Batch job queue configured and have permissions
+      for adding, running, canceling jobs.
+
+
+We need 3 files for running in AWS Batch, copy the files and remove
+the =.example= extension and adapt them to your case:
+
+*** Job definition
+
+Change the =PROJECT_NAME= and =AWS_ACCOUNT= for their real values
+
+ #+BEGIN_SRC json :tangle infrastructure/triage-job-definition.json.example
+ {
+     "jobDefinitionName": "PROJECT_NAME-run-experiment",
+     "type": "container",
+     "containerProperties": {
+         "image": "AWS_ACCOUNT.dkr.ecr.us-west-2.amazonaws.com/dsapp/triage",
+         "vcpus": 60,
+         "memory": 235520,
+         "jobRoleArn": "arn:aws:iam::AWS_ACCOUNT:role/dsappBatchJobRole",
+		 "command": [
+		     "--experiment-file", "Ref::experiment_file", "--output-path", "Ref::output_path", "Ref::replace"
+	     ]
+     },
+     "retryStrategy": {"attempts": 3}
+ }
+ #+END_SRC
+
+*** Environment overrides
+
+Fill out the missing values
+
+#+BEGIN_SRC json :tangle infrastructure/triage-overrides.json.example
+{
+    "environment": [
+        {
+            "name":"AWS_DEFAULT_REGION",
+            "value":"us-west-2"
+        },
+        {
+            "name":"AWS_JOB_QUEUE",
+            "value":""
+        },
+        {
+            "name":"POSTGRES_PASSWORD",
+            "value":""
+        },
+        {
+            "name":"POSTGRES_USER",
+            "value":""
+        },
+        {
+            "name":"POSTGRES_DB",
+            "value":""
+        },
+        {
+            "name":"POSTGRES_PORT",
+            "value":""
+        },
+        {
+            "name":"POSTGRES_HOST",
+            "value":""
+        },
+        {
+            "name":"POSTGRES_ROLE",
+            "value":""
+        },
+        {
+            "name":"NUMBER_OF_PROCESSES",
+            "value":"10"
+        },
+        {
+            "name":"NUMBER_OF_DB_PROCESSES",
+            "value":"1"
+        }
+    ],
+    "command": [
+        "run_experiments"
+    ]
+}
+
+#+END_SRC
+
+*** =credentials-filter=
+
+Leave this file as is (We will use it for storing the temporal token
+in =deploy.sh=)
+
+#+BEGIN_SRC json :tangle infrastructure/credentials.filter.example
+{
+        "environment": [
+                {
+                        "name": "AWS_ACCESS_KEY_ID",
+                        "value": .Credentials.AccessKeyId
+                },
+                {
+                        "name": "AWS_SECRET_ACCESS_KEY",
+                        "value": .Credentials.SecretAccessKey
+                },
+                {
+                        "name": "AWS_SESSION_TOKEN",
+                        "value": .Credentials.SessionToken
+                }
+        ]
+}
+#+END_SRC
+
+
+*** Running an experiment
+
+We provided a simple bash file for creating the image,
+uploading/updating the job definition and running the experiment:
+
+    #+BEGIN_EXAMPLE shell
+    ./deploy.sh -h
+
+    Usage: ./deploy.sh (-h | -i | -u | -b | -r | -a | --sync_{to,from}_s3 )
+    OPTIONS:
+       -h|--help                   Show this message
+       -i|--info                   Show information about the environment
+       -b|--update-images          Build the chile-dt's triage image and push it to the AWS ECR
+       -u|--update-jobs            Update the chile-dt's triage job definition in AWS Batch
+       -r|--run-experiment         Run experiments on chile-dt data
+       -a|--all                    Creates images, pushes them the registry, updates the jobs and runs the pipeline
+       --sync-to-s3                Uploads the experiments and configuration files to s3://dssg-chile-dt
+       --sync-from-s3              Gets the experiments and configuration files from s3://dssg-chile-dt
+    EXAMPLES:
+       Build and push the images to your AWS ECR:
+            $ ./deploy.sh -b
+       Update the job's definitions:
+            $ ./deploy.sh -u
+       Run triage experiments:
+            $ ./deploy.sh -r --experiment_file=s3://dssg-chile-dt/experiments/test.yaml,output_path=s3://dssg-chile-dt/triage,replace=--replace
+       Everything!:
+            $ ./deploy.sh -a --experiment_file=s3://dssg-chile-dt/experiments/test.yaml,output_path=s3://dssg-chile-dt/triage,replace=--replace
+
+    #+END_EXAMPLE
+
+If you have multiple AWS profiles use =deploy.sh= as follows:
+
+#+BEGIN_EXAMPLE sh
+AWS_PROFILE=your_profile ./deploy.sh -b
+#+END_EXAMPLE
+
+Where =your_profile= is the name of the profile in =~/.aws/credentials=
+
+
+* Meeting notes
+
+Para confirmar los datos, tomar un año y un mes y mandar el número y/o
+una lista con ingreso fiscalizacion cod_oficina, año y numero de comision y id
+fiscalizacion
+
+Descripción de una etiqueta:
+Una fiscalizacion
+3 materias  revisa las contrarto, renumeraciones y protecion a la vida
+(materia revisada) solo encontrada una infracion/sancion en contrato,
+
+3 conceptos -> materia revisada
+    - la fiscalizacion queda sin multa
+
+Si encuentra por lo menos uno
+    - la fiscalizacion queda con multa, infracci'on (el id completa
+      queda con multa)
+
+    - de una a nueve sanciones materias sancionadas (las que tienen infracciones)
+
+    - tipo de termino - con multa / sancionada   -> entonces
+
+
+
+Mejor label: "infractora no multa"
+
+cada materia tiene una situacion inicial es el paso previo a la multa
+(si se detecta o no o se detecta pero no cursa multa)
+
+Se detect'o la infracci'on pero no se gener'o la multa.
+
+La empresa es infractora.
+
+
+
+Otra opcion de inspección:
+sector de la construccion radio establecido, tantos trabajadores,
+fiscalizadores van y pregunta. Radio
+
+¿Cómo una predicción de ecología?
+
+Caveat:
+Grupos de empresa que se pueden reconocer a simple vista (como
+construccion, por ejemplo el permiso) , pero no todos son facilmente identificables
+
+TODOs:
+
+Natalia envió Enero 2017 -> revisar
+
+DT enviará las tablas de sanciones y lista de direcciones. Además de
+la tabla que puedo usar para generar el segundo /label/
+
+
+
+* Tables to ignore
+
+ #+BEGIN_SRC sql
+
+   set role direccion_trabajo_inspections_write;
+
+   drop table if exists semantic.affected_workers;
+
+   create table semantic.affected_workers as (
+
+       select distinct on (idfiscalizacion::integer, rut::integer)
+           idfiscalizacion::integer as event,
+           rut::integer as affected_worker
+       from raw.dt_fi_otrosafectados
+       where rut is not null
+       order by
+           idfiscalizacion::integer asc,
+           rut::integer asc
+           );
+ #+END_SRC
+
+
+* How to run the ETL
+
+You can create the =semantic= schema with all its tables with
+
+#+BEGIN_EXAMPLE sh
+psql -f sql/etl_dump_semantic.sql
+#+END_EXAMPLE
