@@ -1,0 +1,30 @@
+# To use: copy this file to config.yaml
+# and edit for accurate information
+
+# Credentials for database
+db:
+    username: 'emma'
+    password: 'cats123'
+    host: 'sql.cats.io'
+    database: 'example'
+    port: '1234'
+
+# Output (graphs and saved models, matrices) go here
+# Required to include these subdirectories:
+#   precision/
+#   features/
+#   histogram_all/
+#   histogram_label/
+#   models/
+#   matrices/
+output_dir: '/home/emma/output/'
+
+# Directories for all raw data sources
+data_dirs: 
+    output: 'data/' # for files created while preprocessing
+    service_tax: '/raw/partner_data/taxes.csv'
+    inspections: '/raw/partner_data/inspections.csv'
+    copper: '/raw/external_data/copper.csv'
+    macroeconomic_monthly: '/raw/external_data/macro_monthly.csv'
+    offices: '/raw/partner_data/Oficinas_DT.xslx'
+

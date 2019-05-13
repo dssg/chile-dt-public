@@ -1,0 +1,62 @@
+SET ROLE direccion_trabajo_inspections_write;
+
+CREATE SCHEMA IF NOT EXISTS raw;
+
+DROP TABLE IF EXISTS raw.inspections_se;
+
+CREATE TABLE raw.inspections_se (
+	idfiscalizacion VARCHAR,
+    codoficina VARCHAR,
+    agno DECIMAL,
+    nrocomision VARCHAR,
+    totalafectados DECIMAL,
+    urgencia BOOLEAN,
+    solesafectado BOOLEAN,
+    codtiposol VARCHAR,
+    solicitante VARCHAR,
+    codunidadorigen VARCHAR,
+    unidadorigen VARCHAR,
+    codtipotermino VARCHAR,
+    tipotermino VARCHAR,
+    egresoconmulta VARCHAR,
+    empdfcodcomuna VARCHAR,
+    empdmcodcomuna VARCHAR,
+    emptrabhombres VARCHAR,
+    codcae VARCHAR,
+    codtipoempresa VARCHAR,
+    grupocodtipomaterias VARCHAR,
+    grupoglosatipomaterias VARCHAR,
+    grupoglosainfra VARCHAR,
+    grupocodigoinfra VARCHAR,
+    grupoglosainfra_det VARCHAR,
+    grupocodigoinfra_det VARCHAR,
+    grupocodtipomaterias2 VARCHAR,
+    grupoglosatipomaterias2 VARCHAR,
+    grupoglosainfra2 VARCHAR,
+    grupoglosainfra2_det VARCHAR,
+    grupocodigoinfra2 VARCHAR,
+    grupocodigoinfra2_det VARCHAR,
+    grupocodigonormainfra2_det VARCHAR,
+    ntrabajadoressii DECIMAL,
+    tramoventassii DECIMAL,
+    ccae VARCHAR,
+    gcae VARCHAR,
+    crae VARCHAR,
+    grae VARCHAR,
+    noinfra DECIMAL,
+    infra DECIMAL,
+    derechofund DECIMAL,
+    num_materias DECIMAL,
+    num_sind DECIMAL,
+    region VARCHAR,
+    infractor BOOLEAN,
+    exsind BOOLEAN,
+    datereg DATE,
+    mesreg DECIMAL,
+    inrangeofdates VARCHAR,
+    rareruts VARCHAR,
+    rutisna VARCHAR,
+    rutempresamask VARCHAR
+);
+
+\COPY raw.inspections_se from '/mnt/data/projects/direccion_trabajo_inspections/preprocessing/inspections_se_mod_joe3.csv' WITH DELIMITER ';' NULL '.' CSV HEADER;

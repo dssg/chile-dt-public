@@ -1,0 +1,62 @@
+## Taken from https://gist.github.com/pksunkara/988716
+
+# Compiled source #
+###################
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
+
+# Temporary files #
+###################
+*.swp
+*.swo
+*~
+
+# Packages #
+############
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# Logs and databases #
+######################
+*.log
+*.sqlite
+
+# OS generated files #
+######################
+.DS_Store*
+ehthumbs.db
+Icon?
+Thumbs.db
+
+# Data files #
+######################
+*.csv
+*.xlsx
+
+# Other stuff
+#####################
+*.yaml
+!example_config.yaml
+!config_experiments*
+*.profile
+.pytest_cache/
+.ipynb_checkpoints/
+__pycache__/
+modeling/models/*
+!modeling/models/.gitkeep
+modeling/matrices/*
+!modeling/matrices/.gitkeep
+.Rhistory
+
+# Test notebook
+*staging_queries.ipynb
